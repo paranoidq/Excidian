@@ -21,7 +21,7 @@ const NUMBER_COLORS: Record<string, string> = {
 };
 
 /** Turns the part of the workbook a code block points at into data for the grid view. */
-export function buildGrid(wb: Workbook, cfg: BlockConfig): GridData {
+export function buildGrid(wb: Workbook, cfg: BlockConfig, readOnly = false): GridData {
 	const target = cfg.target;
 	const grid =
 		target.kind === "table" ? tableGrid(wb, wb.table(target.table)) : sheetGrid(wb, wb.sheet(target.sheet), target.range, target.columns);
@@ -31,6 +31,15 @@ export function buildGrid(wb: Workbook, cfg: BlockConfig): GridData {
 	grid.columnHeader = cfg.headings || target.kind === "table";
 	// Tables fit the page; sheets keep Excel's column widths and scroll sideways if wider.
 	grid.fit = target.kind === "table";
+	grid.readOnly = readOnly;
+	if (target.kind === "sheet") {
+		grid.sheets = wb.sheets.map((sheet) => sheet.name);
+		grid.activeSheet = wb.sheet(target.sheet).name;
+	}
+	if (readOnly) {
+		grid.rows = grid.rows.filter((row) => row.kind !== "new");
+		for (const row of grid.rows) for (const cell of row.cells) cell.editable = false;
+	}
 	return grid;
 }
 

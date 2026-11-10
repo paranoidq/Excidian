@@ -31,16 +31,29 @@ export class SheetController extends MarkdownRenderChild {
 	private stopWatching?: () => void;
 	private ignoreChangesUntil = 0;
 	private warnedOpenInExcel = false;
+	private workbook?: Workbook;
+	private selectedSheet?: string;
+	private readOnly = true;
+	private generation = 0;
+	private stopped = true;
 
 	constructor(
 		containerEl: HTMLElement,
-		private source: string,
+		private source: string | BlockConfig,
 		/** Vault-relative path of the note containing the block. */
 		private notePath: string,
 		private context: ControllerContext,
 	) {
 		super(containerEl);
 		this.view = new GridView(containerEl, {
+			onSheetChange: (sheet) => {
+				this.selectedSheet = sheet;
+				this.render();
+			},
+			onModeChange: (readOnly) => {
+				this.readOnly = readOnly;
+				this.render();
+			},
 			onCommit: (cell, text) => void this.commit(cell, text),
 			onRefresh: () => void this.reload(),
 			onWarningAction: (warningId, actionId) => this.onWarningAction(warningId, actionId),
@@ -55,6 +68,7 @@ export class SheetController extends MarkdownRenderChild {
 	onunload() {
 		this.context.active.delete(this);
 		this.stop();
+		this.view.destroy();
 	}
 
 	/** Re-reads the block settings, e.g. after the OneDrive folder changed. */
@@ -65,7 +79,8 @@ export class SheetController extends MarkdownRenderChild {
 
 	private start() {
 		try {
-			this.cfg = parseBlockConfig(this.source);
+			this.cfg = typeof this.source === "string" ? parseBlockConfig(this.source) : this.source;
+			this.readOnly = this.cfg.mode ? this.cfg.mode === "readonly" : this.context.settings.defaultReadOnly;
 			this.file = this.context.resolver.resolve(this.cfg.file, this.notePath);
 		} catch (e) {
 			this.cfg = undefined;
@@ -73,6 +88,7 @@ export class SheetController extends MarkdownRenderChild {
 			this.view.showError(errorMessage(e));
 			return;
 		}
+		this.stopped = false;
 		this.stopWatching = this.file.watch(() => {
 			// Our own saves also change the file; those are already on screen.
 			if (Date.now() >= this.ignoreChangesUntil) void this.reload();
@@ -81,22 +97,48 @@ export class SheetController extends MarkdownRenderChild {
 	}
 
 	private stop() {
+		this.stopped = true;
+		this.generation++;
+		this.view.cancelEdit();
 		this.stopWatching?.();
 		this.stopWatching = undefined;
 	}
 
 	private async reload() {
-		if (!this.cfg || !this.file) return;
+		if (!this.cfg || !this.file || this.stopped) return;
+		const generation = ++this.generation;
 		try {
-			await this.show(await readWorkbook(this.file));
+			const wb = await readWorkbook(this.file);
+			const conflicts = await findConflictCopies(this.file);
+			if (this.stopped || generation !== this.generation) return;
+			this.conflicts = conflicts;
+			this.show(wb);
 		} catch (e) {
-			this.view.showError(errorMessage(e));
+			if (!this.stopped && generation === this.generation) this.view.showError(errorMessage(e));
 		}
 	}
 
-	private async show(wb: Workbook) {
-		this.conflicts = await findConflictCopies(this.file!);
-		this.grid = { ...buildGrid(wb, this.cfg!), tooltip: this.file!.displayPath, warnings: this.conflictWarnings() };
+	private show(wb: Workbook) {
+		this.workbook = wb;
+		if (this.cfg?.target.kind === "sheet") {
+			// Bind even a default/numeric selection to its name so external reordering
+			// cannot send an in-flight edit to a different worksheet.
+			if (!this.selectedSheet) this.selectedSheet = wb.sheet(this.cfg.target.sheet).name;
+			else if (!wb.sheets.some((s) => s.name === this.selectedSheet)) this.selectedSheet = wb.sheet().name;
+		}
+		this.render();
+	}
+
+	private effectiveConfig(): BlockConfig {
+		const cfg = this.cfg!;
+		return cfg.target.kind === "sheet" && this.selectedSheet
+			? { ...cfg, target: { ...cfg.target, sheet: this.selectedSheet } }
+			: cfg;
+	}
+
+	private render() {
+		if (!this.workbook || this.stopped) return;
+		this.grid = { ...buildGrid(this.workbook, this.effectiveConfig(), this.readOnly), tooltip: this.file!.displayPath, warnings: this.conflictWarnings() };
 		this.view.render(this.grid);
 	}
 
@@ -135,18 +177,19 @@ export class SheetController extends MarkdownRenderChild {
 	}
 
 	private async commit(cell: CellData, text: string) {
-		const cfg = this.cfg!;
+		if (this.readOnly || !cell.editable || this.stopped || !this.cfg || !this.file) return;
+		// Capture the sheet now: switching tabs during an async save must never redirect an edit.
+		const cfg = this.effectiveConfig();
 		const file = this.file!;
 		const input = parseInput(text);
-
-		if (!this.warnedOpenInExcel && (await isOpenInExcel(file))) {
-			this.warnedOpenInExcel = true;
-			new Notice("Excidian: this file is open in Excel. Saving there will overwrite edits made here; close it or reload it in Excel.", 8000);
-		}
 
 		this.ignoreChangesUntil = Date.now() + 10_000;
 		let warning = null as ValidationIssue | null;
 		try {
+			if (!this.warnedOpenInExcel && (await isOpenInExcel(file))) {
+				this.warnedOpenInExcel = true;
+				new Notice("Excidian: this file is open in Excel. Saving there will overwrite edits made here; close it or reload it in Excel.", 8000);
+			}
 			const wb = await updateWorkbook(file, (wb) => {
 				// Checked against the fresh file, right before writing.
 				const issue = checkEdit(wb, cfg, cell, input);
@@ -154,12 +197,14 @@ export class SheetController extends MarkdownRenderChild {
 				warning = issue;
 				applyEdit(wb, cfg, cell, input);
 			});
-			await this.show(wb);
+			if (this.stopped || file !== this.file) return;
+			this.generation++;
+			this.show(wb);
 			this.view.setStatus(`Saved ${formatRef(cell.row, cell.col)}`);
 			if (warning) new Notice(`Excidian: saved, but ${issueText(warning)}`, 8000);
 		} catch (e) {
 			new Notice(`Excidian: could not save ${formatRef(cell.row, cell.col)}: ${errorMessage(e)}`);
-			if (this.grid) this.view.render(this.grid);
+			if (!this.stopped && file === this.file && this.grid) this.view.render(this.grid);
 		} finally {
 			this.ignoreChangesUntil = Date.now() + 1000;
 		}

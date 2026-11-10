@@ -11,6 +11,7 @@ export interface SettingsTabOptions {
 }
 
 const ONEDRIVE_ROOT = "oneDriveRoot";
+const DEFAULT_READ_ONLY = "defaultReadOnly";
 
 /**
  * Settings → Excidian, declared with Obsidian's settings API so the options also
@@ -32,6 +33,12 @@ export class ExcidianSettingTab extends PluginSettingTab {
 		const detected = this.options.detectOneDriveRoots();
 		const dismissed = settings.dismissedCount;
 		return [
+			{
+				name: "默认只读模式",
+				desc: "预览 Excel 时默认只读。关闭后默认可编辑；每个预览都可以独立切换模式。此设置仅保存在当前设备。",
+				aliases: ["readonly", "edit", "只读", "编辑"],
+				control: { type: "toggle", key: DEFAULT_READ_ONLY },
+			},
 			{
 				name: "OneDrive folder",
 				desc: createFragment((desc) => {
@@ -59,10 +66,15 @@ export class ExcidianSettingTab extends PluginSettingTab {
 	}
 
 	getControlValue(key: string): unknown {
+		if (key === DEFAULT_READ_ONLY) return this.options.settings.defaultReadOnly;
 		return key === ONEDRIVE_ROOT ? this.options.settings.oneDriveRoot : undefined;
 	}
 
 	setControlValue(key: string, value: unknown) {
+		if (key === DEFAULT_READ_ONLY && typeof value === "boolean") {
+			this.options.settings.defaultReadOnly = value;
+			this.changed = true;
+		}
 		if (key === ONEDRIVE_ROOT && typeof value === "string") {
 			this.options.settings.oneDriveRoot = value;
 			this.changed = true;

@@ -5,6 +5,49 @@
 	margin-bottom: var(--size-4-1);
 	font-size: var(--font-ui-small);
 	color: var(--text-muted);
+	flex-wrap: wrap;
+}
+
+.excidian-embed {
+	display: block;
+	width: 100%;
+	min-width: 0;
+}
+
+.excidian-mode {
+	font-size: var(--font-ui-small);
+}
+
+.excidian-mode[aria-pressed="true"] {
+	color: var(--text-on-accent);
+	background: var(--interactive-accent);
+}
+
+.excidian-sheets {
+	display: flex;
+	gap: 4px;
+	overflow-x: auto;
+	padding: 6px 0;
+	border-bottom: 1px solid var(--background-modifier-border);
+}
+
+.excidian-sheets .excidian-sheet-tab {
+	flex-shrink: 0;
+	box-shadow: none;
+	background: transparent;
+	color: var(--text-muted);
+	font-size: var(--font-ui-small);
+}
+
+.excidian-sheets .excidian-sheet-tab[aria-selected="true"] {
+	background: var(--background-modifier-hover);
+	color: var(--text-accent);
+	font-weight: var(--font-semibold);
+}
+
+.excidian-is-readonly .excidian-table td {
+	cursor: text;
+	user-select: text;
 }
 
 .excidian-title {

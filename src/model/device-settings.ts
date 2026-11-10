@@ -5,11 +5,12 @@ export interface DeviceStore {
 }
 
 interface Stored {
+	defaultReadOnly?: boolean;
 	oneDriveRoot?: string;
 	dismissedWarnings?: string[];
 }
 
-const KEY = "excidian-device-settings";
+const KEY = "excidian-dev-device-settings";
 const MAX_DISMISSED = 50;
 
 /**
@@ -32,7 +33,9 @@ export class DeviceSettings {
 		// Keep only well-formed fields, in case the stored value was damaged.
 		const root = "oneDriveRoot" in parsed ? parsed.oneDriveRoot : undefined;
 		const dismissed = "dismissedWarnings" in parsed ? parsed.dismissedWarnings : undefined;
+		const readOnly = "defaultReadOnly" in parsed ? parsed.defaultReadOnly : undefined;
 		return {
+			defaultReadOnly: typeof readOnly === "boolean" ? readOnly : undefined,
 			oneDriveRoot: typeof root === "string" ? root : undefined,
 			dismissedWarnings: Array.isArray(dismissed) ? dismissed.filter((id): id is string => typeof id === "string") : undefined,
 		};
@@ -40,6 +43,14 @@ export class DeviceSettings {
 
 	private write(change: Partial<Stored>) {
 		this.store.save(KEY, JSON.stringify({ ...this.read(), ...change }));
+	}
+
+	get defaultReadOnly(): boolean {
+		return this.read().defaultReadOnly ?? true;
+	}
+
+	set defaultReadOnly(value: boolean) {
+		this.write({ defaultReadOnly: value });
 	}
 
 	get oneDriveRoot(): string {

@@ -5,6 +5,8 @@ import type { CellData, CellStyle, GridData, RowData, WarningData } from "./grid
 const ROW_NUMBER_PX = 44;
 
 export interface GridCallbacks {
+	onSheetChange(sheet: string): void;
+	onModeChange(readOnly: boolean): void;
 	onCommit(cell: CellData, text: string): void;
 	onRefresh(): void;
 	onWarningAction(warningId: string, actionId: string): void;
@@ -23,6 +25,11 @@ interface ActiveEdit {
  */
 export class GridView {
 	private titleEl?: HTMLElement;
+	private sheetsEl?: HTMLElement;
+	private modeEl?: HTMLButtonElement;
+	private sheetKey = "";
+	private readOnly = true;
+	private identity = "";
 	private statusEl?: HTMLElement;
 	private warningsEl?: HTMLElement;
 	private tableEl?: HTMLTableElement;
@@ -42,10 +49,18 @@ export class GridView {
 		private callbacks: GridCallbacks,
 	) {
 		root.addClass("excidian");
+		root.addEventListener("click", (e) => e.stopPropagation());
 	}
 
 	/** Draws the grid, updating the existing one in place so an open editor survives refreshes. */
 	render(grid: GridData) {
+		const identity = `${grid.tooltip}\u0000${grid.activeSheet ?? grid.title}`;
+		if (identity !== this.identity || grid.readOnly) {
+			this.cancelEdit();
+			if (identity !== this.identity) this.reset();
+		}
+		this.identity = identity;
+		this.readOnly = grid.readOnly ?? false;
 		const rowNumbers = grid.rowNumbers !== false;
 		const columnHeader = grid.columnHeader !== false;
 		const columnsKey = [rowNumbers, columnHeader, ...grid.columns].join("\u0000");
@@ -54,6 +69,12 @@ export class GridView {
 
 		this.titleEl!.setText(grid.title);
 		this.titleEl!.title = grid.tooltip;
+		setIcon(this.modeEl!, this.readOnly ? "eye" : "pencil");
+		this.modeEl!.title = this.readOnly ? "当前只读 · 点击切换为可编辑" : "当前可编辑 · 点击切换为只读";
+		this.modeEl!.setAttribute("aria-label", this.readOnly ? "切换为可编辑模式" : "切换为只读模式");
+		this.modeEl!.setAttribute("aria-pressed", String(!this.readOnly));
+		this.root.toggleClass("excidian-is-readonly", this.readOnly);
+		this.renderSheets(grid);
 		this.renderWarnings(grid.warnings ?? []);
 		this.sizeColumns(grid);
 		this.data = grid.rows.map((row) => row.cells);
@@ -83,6 +104,17 @@ export class GridView {
 		this.statusTimer = window.setTimeout(() => this.statusEl?.setText(""), 2000);
 	}
 
+	/** Stop an unfinished editor before changing sheet, mode or lifecycle. */
+	cancelEdit() {
+		this.editing?.finish(false);
+		this.pendingFocus = null;
+	}
+
+	destroy() {
+		this.reset();
+		window.clearTimeout(this.statusTimer);
+	}
+
 	private reset() {
 		this.editing?.finish(false);
 		this.root.empty();
@@ -90,14 +122,24 @@ export class GridView {
 		this.columnsKey = "";
 		this.rowEls = [];
 		this.editing = null;
+		this.pendingFocus = null;
+		this.sheetKey = "";
 	}
 
 	private build(columns: string[], rowNumbers: boolean, columnHeader: boolean) {
 		this.reset();
 		this.rowNumbers = rowNumbers;
 		const bar = this.root.createDiv("excidian-toolbar");
+		// Toolbar/tab controls belong to the preview, including in Live Preview.
+		bar.addEventListener("mousedown", (e) => { e.preventDefault(); e.stopPropagation(); });
+		bar.addEventListener("click", (e) => e.stopPropagation());
 		this.titleEl = bar.createSpan("excidian-title");
 		this.statusEl = bar.createSpan("excidian-status");
+		this.modeEl = bar.createEl("button", { cls: "clickable-icon excidian-mode" });
+		this.modeEl.onclick = () => {
+			this.editing?.finish(true);
+			this.callbacks.onModeChange(!this.readOnly);
+		};
 		const refresh = bar.createEl("button", { cls: "clickable-icon", attr: { "aria-label": "Reload from disk" } });
 		setIcon(refresh, "refresh-cw");
 		refresh.onclick = () => this.callbacks.onRefresh();
@@ -131,6 +173,43 @@ export class GridView {
 			if (r !== -1) this.startEdit(r, Array.prototype.indexOf.call(tr.children, td) - this.offset);
 		});
 		this.noteEl = this.root.createDiv("excidian-note");
+		this.sheetsEl = this.root.createDiv({ cls: "excidian-sheets", attr: { role: "tablist", "aria-label": "工作表" } });
+		this.sheetsEl.addEventListener("mousedown", (e) => { e.preventDefault(); e.stopPropagation(); });
+		this.sheetsEl.addEventListener("click", (e) => e.stopPropagation());
+	}
+
+	private renderSheets(grid: GridData) {
+		const key = JSON.stringify([grid.sheets, grid.activeSheet]);
+		if (key === this.sheetKey) return;
+		this.sheetKey = key;
+		this.sheetsEl!.empty();
+		this.sheetsEl!.toggle(!!grid.sheets?.length);
+		for (const name of grid.sheets ?? []) {
+			const active = name === grid.activeSheet;
+			const tab = this.sheetsEl!.createEl("button", {
+				text: name,
+				cls: "excidian-sheet-tab",
+				attr: { role: "tab", "aria-selected": String(active), "aria-label": `工作表 ${name}`, tabindex: active ? "0" : "-1" },
+			});
+			tab.onclick = () => {
+				if (active) return;
+				this.editing?.finish(true);
+				this.callbacks.onSheetChange(name);
+			};
+			tab.addEventListener("keydown", (e) => {
+				const names = grid.sheets!;
+				const i = names.indexOf(name);
+				const next = e.key === "ArrowRight" ? (i + 1) % names.length
+					: e.key === "ArrowLeft" ? (i + names.length - 1) % names.length
+					: e.key === "Home" ? 0 : e.key === "End" ? names.length - 1 : -1;
+				if (next < 0) return;
+				e.preventDefault();
+				e.stopPropagation();
+				this.editing?.finish(true);
+				this.callbacks.onSheetChange(names[next]);
+				(this.sheetsEl?.children[next] as HTMLElement | undefined)?.focus();
+			});
+		}
 	}
 
 	/**
@@ -226,6 +305,7 @@ export class GridView {
 	}
 
 	private startEdit(r: number, c: number) {
+		if (this.readOnly) return;
 		if (this.editing?.r === r && this.editing.c === c) return;
 		this.editing?.finish(true);
 

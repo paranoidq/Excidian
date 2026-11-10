@@ -1,5 +1,8 @@
 /** Everything the grid view needs to draw. Built by the controller from the model. */
 export interface GridData {
+	readOnly?: boolean;
+	sheets?: string[];
+	activeSheet?: string;
 	title: string;
 	tooltip: string;
 	columns: string[];

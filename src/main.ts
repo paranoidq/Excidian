@@ -4,6 +4,7 @@ import { DeviceSettings } from "./model/device-settings";
 import type { FileResolver } from "./model/storage";
 import { VaultResolver } from "./platform/vault-file";
 import { ExcidianSettingTab } from "./view/settings-tab";
+import { registerWorkbookEmbeds } from "./view/workbook-embed";
 
 export default class ExcidianPlugin extends Plugin {
 	async onload() {
@@ -41,6 +42,10 @@ export default class ExcidianPlugin extends Plugin {
 
 		this.registerMarkdownCodeBlockProcessor("excidian", (source, el, ctx) => {
 			ctx.addChild(new SheetController(el, source, ctx.sourcePath, context));
+		});
+		registerWorkbookEmbeds(this, context);
+		this.register(() => {
+			for (const controller of [...context.active]) controller.unload();
 		});
 	}
 }

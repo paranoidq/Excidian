@@ -24,6 +24,8 @@ export interface BlockConfig {
 	target: BlockTarget;
 	/** Show column letters and row numbers (default true). */
 	headings: boolean;
+	/** Omitted uses the default in settings. */
+	mode?: "readonly" | "edit";
 }
 
 /**
@@ -43,6 +45,9 @@ export function parseBlockConfig(source: string): BlockConfig {
 		if (m) cfg[m[1].toLowerCase()] = m[2].replace(/^["']|["']$/g, "");
 	}
 	if (!cfg.file) throw new Error("Missing `file:`, the path to your .xlsx file.");
+	if (cfg.mode && cfg.mode !== "readonly" && cfg.mode !== "edit") {
+		throw new Error("Invalid `mode:`. Use `readonly` or `edit`.");
+	}
 	if (cfg.table && (cfg.sheet || cfg.range || cfg.cols)) {
 		throw new Error("`range:` and `cols:` work with `sheet:`. For a table, use `table:` alone (table names are unique).");
 	}
@@ -57,6 +62,7 @@ export function parseBlockConfig(source: string): BlockConfig {
 					columns: cfg.cols ? parseColumnList(cfg.cols) : undefined,
 				},
 		headings: !/^(false|no|off|0|hide|hidden)$/i.test(cfg.headings ?? ""),
+		mode: cfg.mode as BlockConfig["mode"],
 	};
 }
 

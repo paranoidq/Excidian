@@ -1,4 +1,37 @@
-# Excidian
+# Excidian-dev
+
+## Development preview (0.3.0-dev)
+
+Embed a workbook directly with Obsidian's attachment syntax:
+
+```markdown
+![[budget.xlsx]]
+![[Finance/budget.xlsx#2026|Budget]]
+```
+
+Reading view and Live Preview show worksheet tabs below the grid. Click a tab to
+switch sheets; an optional `#Sheet name` selects the initial sheet. Short file
+names, aliases and link updates on rename use Obsidian's normal link resolution.
+
+Previews start **read-only**. Use the **eye / pencil** icon in the toolbar to switch the
+current preview. Settings → **Excidian-dev** → **默认只读模式** changes the default
+on this device. Read-only mode disables cell editing and hides the append row.
+An edit is saved when you press Enter/Tab, leave the cell, or change sheet/mode;
+Escape cancels it. Worksheet/mode choices are local to each preview and do not
+modify the note. Reloading the note uses the configured defaults again.
+
+Existing `excidian` blocks still work, including `table`, `range`, `cols` and
+`headings`. Add `mode: readonly` or `mode: edit` to override the initial mode for
+one block. Sheet blocks have worksheet tabs; named table blocks retain their
+focused table view.
+
+For local installation, run `npm ci && npm run build`, then copy `main.js`,
+`manifest.json` and `styles.css` into `<vault>/.obsidian/plugins/excidian-dev/`
+and enable **Excidian-dev**. Its plugin ID and device settings are separate from
+the released plugin. The embed integration feature-detects Obsidian's internal
+embed registry; if unavailable, the public fallback supports Reading view only.
+
+---
 
 **Your spreadsheets, alive in your notes.** Excidian shows Excel tables and sheets inside Obsidian, and every edit you make is saved straight back into the `.xlsx` file. No exports, no copies, no sync scripts.
 
