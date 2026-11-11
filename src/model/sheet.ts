@@ -1,11 +1,12 @@
+import { safeLink } from "./hyperlinks";
 import { shiftFormula } from "./ooxml/formula";
 import type { Package } from "./ooxml/package";
 import { formatRange, formatRef, inRange, MAX_COL, MAX_ROW, parseRange, parseRef, Range } from "./ooxml/refs";
-import type { CellFormat, Styles } from "./ooxml/styles";
+import type { CellFormat, CellStylePatch, Styles } from "./ooxml/styles";
 import { child, createChild, elements, removeChildren, richText, setText, textOf } from "./ooxml/xml";
 import type { Table } from "./table";
 import { readValidations, ValidationRule } from "./validation";
-import { CellInput, CellValue, dateToSerial, serialToDate } from "./values";
+import { CellInput, CellValue, dateToSerial, serialToDate, validateInput } from "./values";
 
 export interface CellInfo {
 	value: CellValue;
@@ -65,8 +66,33 @@ export class Sheet {
 		readonly tables: Table[],
 	) {}
 
+	private writeBlockedRanges?: Range[];
+	private links?: { range: Range; target: string }[];
+
 	private get root(): Element {
 		return this.ctx.pkg.xml(this.path)!.documentElement;
+	}
+
+	get partPath(): string { return this.path; }
+
+	/** Frozen leading rows/columns; normal split panes are not frozen. */
+	frozenPane(): { rows: number; columns: number } {
+		const views = child(this.root, "sheetViews");
+		const view = views && child(views, "sheetView");
+		const pane = view && child(view, "pane");
+		if (!pane || !["frozen", "frozenSplit"].includes(pane.getAttribute("state") ?? "")) return { rows: 0, columns: 0 };
+		return { rows: Math.max(0, Number(pane.getAttribute("ySplit") ?? 0)), columns: Math.max(0, Number(pane.getAttribute("xSplit") ?? 0)) };
+	}
+
+	/** Materialize shared formulas before coordinates move, then drop XML indexes. */
+	prepareStructureEdit() {
+		this.index();
+		for (const si of [...this.sharedMasters.keys()]) this.unshare(si);
+	}
+
+	invalidate() {
+		this.rows.clear(); this.cells.clear(); this.sharedMasters.clear();
+		this.indexed = false; this.rules = undefined; this.columnList = undefined; this.writeBlockedRanges = undefined; this.links = undefined;
 	}
 
 	private get sheetData(): Element {
@@ -97,6 +123,21 @@ export class Sheet {
 				}
 			}
 		}
+	}
+
+	hyperlink(row: number, col: number): string | undefined {
+		if (!this.links) {
+			this.links = [];
+			const split = this.partPath.lastIndexOf("/");
+			const rels = this.ctx.pkg.xml(`${this.partPath.slice(0, split)}/_rels/${this.partPath.slice(split + 1)}.rels`);
+			const targets = new Map((rels ? elements(rels.documentElement, "Relationship") : []).filter((rel) => rel.getAttribute("TargetMode") === "External").map((rel) => [rel.getAttribute("Id"), rel.getAttribute("Target") ?? ""]));
+			const links = child(this.root, "hyperlinks");
+			for (const link of links ? elements(links, "hyperlink") : []) {
+				const target = safeLink(targets.get(link.getAttribute("r:id")) ?? "");
+				if (target && link.getAttribute("ref")) this.links.push({ range: parseRange(link.getAttribute("ref")!), target });
+			}
+		}
+		return this.links.find((link) => inRange(link.range, row, col))?.target;
 	}
 
 	cell(row: number, col: number): CellInfo {
@@ -163,6 +204,15 @@ export class Sheet {
 			right = Math.max(right, col);
 		}
 		return bottom ? { top: 1, left: 1, bottom, right } : null;
+	}
+
+	/** Includes explicitly inserted blank rows/columns, unlike the content range. */
+	displayRange(): Range | null {
+		const ref = child(this.root, "dimension")?.getAttribute("ref");
+		const used = this.usedRange();
+		if (!ref) return used;
+		const dimension = parseRange(ref);
+		return { top: 1, left: 1, bottom: Math.max(used?.bottom ?? 1, dimension.bottom), right: Math.max(used?.right ?? 1, dimension.right) };
 	}
 
 	mergedRanges(): Range[] {
@@ -234,7 +284,35 @@ export class Sheet {
 		return this.tables.some((t) => t.headerRows > 0 && row === t.ref.top && inRange(t.ref, row, col));
 	}
 
+	/** Refuse cell writes whose semantics cannot be preserved safely. */
+	assertWritable(row: number, col: number) {
+		if (child(this.root, "sheetProtection")) throw new Error("工作表已受保护，请先在 Excel 中解除保护。");
+		this.index();
+		if (!this.writeBlockedRanges) {
+			this.writeBlockedRanges = [];
+			for (const entry of this.cells.values()) {
+				const f = child(entry.el, "f");
+				if (f && ["array", "dataTable"].includes(f.getAttribute("t") ?? "")) this.writeBlockedRanges.push(parseRange(f.getAttribute("ref") || formatRef(entry.row, entry.col)));
+			}
+		}
+		if (this.writeBlockedRanges.some((range) => inRange(range, row, col))) throw new Error("数组公式或数据表区域请在 Excel 中编辑。");
+	}
+
+	formatCell(row: number, col: number, patch: CellStylePatch) {
+		if (!Number.isInteger(row) || !Number.isInteger(col) || row < 1 || row > MAX_ROW || col < 1 || col > MAX_COL) throw new Error("单元格超出工作表范围。");
+		this.assertWritable(row, col);
+		const existing = this.cells.get(key(row, col))?.el;
+		const original = this.styleOf(existing, row, col);
+		const next = this.ctx.styles.formatStyle(original, patch);
+		if (next === original) return;
+		(existing ?? this.createCell(row, col)).setAttribute("s", String(next));
+		this.growDimension(row, col);
+		this.markDirty();
+	}
+
 	setCell(row: number, col: number, input: CellInput) {
+		validateInput(input);
+		this.assertWritable(row, col);
 		if (row < 1 || row > MAX_ROW || col < 1 || col > MAX_COL) throw new Error(`Cell ${formatRef(row, col)} is outside the sheet.`);
 		this.index();
 		const k = key(row, col);
@@ -257,6 +335,10 @@ export class Sheet {
 		el ??= this.createCell(row, col);
 		clearContent(el);
 		switch (input.kind) {
+			case "boolean":
+				el.setAttribute("t", "b");
+				setText(createChild(el, "v"), input.value ? "1" : "0");
+				break;
 			case "number":
 				setText(createChild(el, "v"), String(input.value));
 				break;
@@ -264,6 +346,10 @@ export class Sheet {
 				el.setAttribute("t", "inlineStr");
 				const t = createChild(createChild(el, "is"), "t");
 				setText(t, input.value);
+				if (/\r|\n/.test(input.value)) {
+					const style = this.styleOf(el, row, col);
+					if (!this.ctx.styles.cellFormat(style).wrap) el.setAttribute("s", String(this.ctx.styles.formatStyle(style, { wrap: true })));
+				}
 				if (/^\s|\s$/.test(input.value)) t.setAttribute("xml:space", "preserve");
 				break;
 			}

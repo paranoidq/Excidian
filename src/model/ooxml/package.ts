@@ -1,5 +1,5 @@
 import { strFromU8, strToU8, unzipSync, zipSync, type Zippable } from "fflate";
-import { elements, parseXml, serializeXml } from "./xml";
+import { createChild, elements, parseXml, serializeXml } from "./xml";
 
 export interface Relationship {
 	id: string;
@@ -56,6 +56,28 @@ export class Package {
 				type: r.getAttribute("Type") ?? "",
 				target: resolveTarget(baseDir, r.getAttribute("Target") ?? ""),
 			}));
+	}
+
+	/** Adds a workbook part alongside its owner and wires up its package metadata. */
+	addRelatedXml(ownerPath: string, filename: string, type: string, contentType: string, xml: string): string {
+		const relsPath = relsPathOf(ownerPath);
+		const rels = this.xml(relsPath)?.documentElement;
+		const types = this.xml(CONTENT_TYPES)?.documentElement;
+		if (!rels || !types) throw new Error("工作簿缺少必要的文件关系，无法添加样式。");
+		const dir = ownerPath.slice(0, ownerPath.lastIndexOf("/") + 1);
+		let name = filename, n = 1;
+		while (this.entries[dir + name] || this.docs.has(dir + name)) name = `excidian-${n++}-${filename}`;
+		const target = dir + name;
+		const ids = new Set(elements(rels, "Relationship").map((el) => el.getAttribute("Id")));
+		n = 1;
+		while (ids.has(`rId${n}`)) n++;
+		const rel = createChild(rels, "Relationship");
+		rel.setAttribute("Id", `rId${n}`); rel.setAttribute("Type", type); rel.setAttribute("Target", name);
+		const override = createChild(types, "Override");
+		override.setAttribute("PartName", `/${target}`); override.setAttribute("ContentType", contentType);
+		this.docs.set(target, parseXml(xml));
+		for (const path of [target, relsPath, CONTENT_TYPES]) this.markDirty(path);
+		return target;
 	}
 
 	/** Deletes a part together with its relationship from `ownerPath` and its content-type entry. */

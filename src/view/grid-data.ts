@@ -1,5 +1,13 @@
 /** Everything the grid view needs to draw. Built by the controller from the model. */
 export interface GridData {
+	/** Whole-sheet structural actions are offered only in sheet previews. */
+	structureEditable?: boolean;
+	columnNumbers?: number[];
+	frozen?: { rows: number; columns: number };
+	busy?: boolean;
+	canOpenLocal?: boolean;
+	canUndo?: boolean;
+	canRedo?: boolean;
 	readOnly?: boolean;
 	sheets?: string[];
 	activeSheet?: string;
@@ -42,6 +50,7 @@ export interface CellData {
 	row: number;
 	col: number;
 	text: string;
+	link?: string;
 	editText: string;
 	editable: boolean;
 	numeric?: boolean;

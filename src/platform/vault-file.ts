@@ -2,7 +2,7 @@
 // used on mobile, where the vault is the only place an app can reach.
 // Only types are imported from "obsidian", so this can be tested with a fake vault.
 import type { App, EventRef, TAbstractFile, TFile } from "obsidian";
-import { FileResolver, isConflictCopyName, resolveInVault, SiblingFile, StoredFile } from "../model/storage";
+import { FileResolver, isConflictCopyName, isExcelOwnerName, resolveInVault, SiblingFile, StoredFile } from "../model/storage";
 
 function isFile(f: TAbstractFile | null): f is TFile {
 	return !!f && "stat" in f;
@@ -65,7 +65,7 @@ export class VaultFile implements StoredFile {
 			const slash = vaultPath.lastIndexOf("/");
 			const folder = slash === -1 ? "" : vaultPath.slice(0, slash);
 			const name = vaultPath.slice(slash + 1);
-			return folder === this.folder && (name === this.name || isConflictCopyName(this.name, name));
+			return folder === this.folder && (name === this.name || isConflictCopyName(this.name, name) || isExcelOwnerName(this.name, name));
 		};
 		const handler = (file: TAbstractFile, oldPath?: string) => {
 			if (!relevant(file.path) && !relevant(oldPath)) return;

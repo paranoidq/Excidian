@@ -3,7 +3,9 @@ import { readThemeColors } from "./ooxml/colors";
 import { shiftFormula } from "./ooxml/formula";
 import { Package } from "./ooxml/package";
 import { colNumber, formatRef, MAX_ROW, parseRange, Range } from "./ooxml/refs";
-import { Styles } from "./ooxml/styles";
+import { defaultStylesXml, Styles } from "./ooxml/styles";
+import { editStructure } from "./ooxml/structure";
+import type { StructureEdit } from "./ooxml/structure-refs";
 import { child, createChild, elements, NS_RELATIONSHIPS, richText, textOf } from "./ooxml/xml";
 import { Sheet, SheetContext } from "./sheet";
 import { Table } from "./table";
@@ -49,7 +51,10 @@ export class Workbook {
 		const themePath = rels.find(REL_TYPE("theme"))?.target;
 		const ctx: SheetContext = {
 			pkg,
-			styles: new Styles(pkg, rels.find(REL_TYPE("styles"))?.target, readThemeColors(themePath ? pkg.xml(themePath)?.documentElement : undefined)),
+			styles: new Styles(pkg, rels.find(REL_TYPE("styles"))?.target, readThemeColors(themePath ? pkg.xml(themePath)?.documentElement : undefined), () => {
+				const relationship = rels.find(REL_TYPE("worksheet"))?.type.replace(/\/worksheet$/, "/styles") ?? `${NS_RELATIONSHIPS}/styles`;
+				return pkg.addRelatedXml(path, "styles.xml", relationship, "application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml", defaultStylesXml(doc.documentElement.namespaceURI === "http://purl.oclc.org/ooxml/spreadsheetml/main" ? doc.documentElement.namespaceURI : "http://schemas.openxmlformats.org/spreadsheetml/2006/main"));
+			}),
 			sharedStrings: readSharedStrings(pkg, rels.find(REL_TYPE("sharedStrings"))?.target),
 			date1904: ["1", "true"].includes(workbookPr?.getAttribute("date1904") ?? ""),
 		};
@@ -97,6 +102,31 @@ export class Workbook {
 
 	tables(): TableLocation[] {
 		return this.sheets.flatMap((sheet) => sheet.tables.map((table) => ({ table, sheet })));
+	}
+
+	editStructure(sheetName: string, edit: StructureEdit) {
+		editStructure(this.pkg, this.path, this.sheets, this.sheet(sheetName), edit);
+		if (edit.kind === "insert" && edit.axis === "row") {
+			const sheet = this.sheet(sheetName);
+			for (const table of sheet.tables) {
+				const data = table.dataRange;
+				for (let row = Math.max(edit.start, data.top); row <= Math.min(edit.start + edit.count - 1, data.bottom); row++) {
+					for (let col = data.left; col <= data.right; col++) {
+						const above = row > data.top ? sheet.cell(row - 1, col).formula : undefined;
+						const belowRow = edit.start + edit.count;
+						const below = belowRow <= data.bottom ? sheet.cell(belowRow, col).formula : undefined;
+						const formula = above ? shiftFormula(above, 1, 0) : below ? shiftFormula(below, row - belowRow, 0) : table.columns[col - data.left].calculatedFormula;
+						if (formula) sheet.setCell(row, col, { kind: "formula", formula });
+					}
+				}
+			}
+		}
+		const names = child(this.pkg.xml(this.path)!.documentElement, "definedNames");
+		this.definedNames = (names ? elements(names, "definedName") : []).map((name) => ({
+			name: name.getAttribute("name") ?? "",
+			sheet: name.hasAttribute("localSheetId") ? this.sheets[Number(name.getAttribute("localSheetId"))]?.name : undefined,
+			formula: textOf(name),
+		}));
 	}
 
 	/** Finds a table by name (case-insensitive, like Excel). */
@@ -298,7 +328,8 @@ export class Workbook {
 	}
 
 	/** Serializes the workbook. Excel recalculates formulas the next time it opens the file. */
-	async save(): Promise<Uint8Array> {
+	async save(recalculate = true): Promise<Uint8Array> {
+		if (!recalculate) return this.pkg.toBytes();
 		const calcChain = this.pkg.rels(this.path).find(REL_TYPE("calcChain"));
 		// The calculation chain lists formula cells; edits can make it stale, and Excel rebuilds it.
 		if (calcChain) this.pkg.removePart(calcChain.target, this.path);

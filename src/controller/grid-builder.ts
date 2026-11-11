@@ -1,5 +1,6 @@
+import { safeLink } from "../model/hyperlinks";
 import { formatValue, numberColor } from "../model/number-format";
-import { colName, inRange, Range } from "../model/ooxml/refs";
+import { colName, inRange, MAX_COL, MAX_ROW, Range } from "../model/ooxml/refs";
 import type { CellInfo, Sheet } from "../model/sheet";
 import type { Table } from "../model/table";
 import type { ListOption, ValidationRule } from "../model/validation";
@@ -9,6 +10,8 @@ import type { CellData, CellStyle, GridData, RowData, RowKind } from "../view/gr
 import type { AreaRange, BlockConfig } from "./block-config";
 
 const MAX_ROWS = 5000;
+const MAX_DISPLAY_CELLS = 30_000;
+function rowLimit(columns: number) { return Math.max(1, Math.min(MAX_ROWS, Math.floor(MAX_DISPLAY_CELLS / Math.max(columns, 1)))); }
 
 // Colours of number formats like [Red], in Obsidian theme colours.
 const NUMBER_COLORS: Record<string, string> = {
@@ -21,7 +24,7 @@ const NUMBER_COLORS: Record<string, string> = {
 };
 
 /** Turns the part of the workbook a code block points at into data for the grid view. */
-export function buildGrid(wb: Workbook, cfg: BlockConfig, readOnly = false): GridData {
+export function buildGrid(wb: Workbook, cfg: BlockConfig, readOnly = false, includeEntryColumn = false): GridData {
 	const target = cfg.target;
 	const grid =
 		target.kind === "table" ? tableGrid(wb, wb.table(target.table)) : sheetGrid(wb, wb.sheet(target.sheet), target.range, target.columns);
@@ -35,36 +38,49 @@ export function buildGrid(wb: Workbook, cfg: BlockConfig, readOnly = false): Gri
 	if (target.kind === "sheet") {
 		grid.sheets = wb.sheets.map((sheet) => sheet.name);
 		grid.activeSheet = wb.sheet(target.sheet).name;
+		grid.structureEditable = !readOnly;
+		grid.frozen = wb.sheet(target.sheet).frozenPane();
+		// An empty column beside an unrestricted sheet is the entry point for new data.
+		const lastColumn = wb.sheet(target.sheet).displayRange()?.right ?? 1;
+		if (includeEntryColumn && !readOnly && !target.range && !target.columns && lastColumn < MAX_COL && lastColumn < 256) {
+			const col = lastColumn + 1;
+			grid.columnNumbers!.push(col); grid.columns.push(colName(col)); grid.columnWidths!.push(8.43);
+			for (const row of grid.rows) row.cells.push({ row: Number(row.label), col, text: "", editText: "", editable: true });
+		}
 	}
 	if (readOnly) {
 		grid.rows = grid.rows.filter((row) => row.kind !== "new");
 		for (const row of grid.rows) for (const cell of row.cells) cell.editable = false;
 	}
+	if (grid.rows.some((row) => row.cells.some((cell) => cell.formula))) grid.note = [grid.note, "公式显示 Excel 上次保存的结果；修改数据后，请在 Excel 中重新计算。"].filter(Boolean).join(" ");
 	return grid;
 }
 
-/** An Excel table: its columns, every data row (filters ignored), totals, and a row for new entries. */
+/** An Excel table in saved row order, excluding rows hidden by Excel filters. */
 function tableGrid(wb: Workbook, location: TableLocation): GridData {
 	const { table, sheet } = location;
 	const ref = table.ref;
 	const data = table.dataRange;
-	const lastShown = Math.min(data.bottom, data.top + MAX_ROWS - 1);
+	const columns = range(ref.left, Math.min(ref.right, ref.left + 255));
+	const limit = rowLimit(columns.length);
 	const blocker = wb.appendBlocker(location);
 
-	const columns = range(ref.left, ref.right);
 	const rows: { row: number; kind: RowKind }[] = [];
-	for (let r = data.top; r <= lastShown; r++) rows.push({ row: r, kind: "data" });
-	for (let r = data.bottom + 1; r <= ref.bottom; r++) rows.push({ row: r, kind: "totals" });
-	if (!blocker && lastShown === data.bottom) rows.push({ row: ref.bottom + 1, kind: "new" });
+	let r = data.top;
+	for (; r <= data.bottom && rows.length < limit; r++) if (!sheet.isRowHidden(r)) rows.push({ row: r, kind: "data" });
+	const complete = r > data.bottom;
+	for (let r = data.bottom + 1; r <= ref.bottom; r++) if (!sheet.isRowHidden(r)) rows.push({ row: r, kind: "totals" });
+	if (!blocker && complete) rows.push({ row: ref.bottom + 1, kind: "new" });
 
 	const notes = [];
-	if (lastShown < data.bottom) notes.push(`Showing the first ${MAX_ROWS} rows.`);
+	if (!complete) notes.push(`Showing the first ${limit} visible data rows (preview cell budget).`);
+	if (ref.right - ref.left + 1 > columns.length) notes.push("Showing the first 256 table columns. Use a sheet range to view other columns.");
 	if (blocker) notes.push(`New rows can't be added: ${blocker}`);
 
 	return {
 		title: `${table.name} · ${sheet.name}`,
 		tooltip: "",
-		columns: table.columns.map((c) => c.name),
+		columns: table.columns.slice(0, columns.length).map((c) => c.name),
 		columnWidths: columns.map((c) => columnWidth(sheet, c)),
 		rows: new RowBuilder(wb, sheet, columns, rows, table).build(),
 		note: notes.join(" ") || undefined,
@@ -77,28 +93,34 @@ function tableGrid(wb: Workbook, location: TableLocation): GridData {
  * (shown even if hidden in Excel, since they were asked for by name).
  */
 function sheetGrid(wb: Workbook, sheet: Sheet, area: AreaRange | undefined, pick: number[] | undefined): GridData {
-	const used = sheet.usedRange();
+	const used = sheet.displayRange();
 	const top = area?.top ?? 1;
 	const left = area?.left ?? 1;
-	const right = area?.right ?? Math.max(used?.right ?? 1, left);
+	const right = area?.right ?? Math.min(Math.max(used?.right ?? 1, left), left + 255);
 	const usedBottom = area?.bottom ?? Math.max(used?.bottom ?? 0, top - 1);
 
-	const columns = pick ?? range(left, right).filter((c) => !sheet.column(c).hidden);
+	const columns = (pick ?? range(left, right).filter((c) => !sheet.column(c).hidden)).slice(0, 256);
+	const limit = rowLimit(columns.length + 1);
 	const rows: { row: number; kind: RowKind }[] = [];
-	for (let r = top; r <= usedBottom && rows.length < MAX_ROWS; r++) {
+	let r = top;
+	for (; r <= usedBottom && rows.length < limit; r++) {
 		if (!sheet.isRowHidden(r)) rows.push({ row: r, kind: "data" });
 	}
-	const complete = rows.length < MAX_ROWS;
+	const complete = r > usedBottom;
 	// An open-ended area gets an empty row at the bottom for adding entries.
-	if (area?.bottom === undefined && complete) rows.push({ row: usedBottom + 1, kind: "new" });
+	if (area?.bottom === undefined && complete && usedBottom < MAX_ROW) rows.push({ row: usedBottom + 1, kind: "new" });
 
 	return {
 		title: sheet.name,
 		tooltip: "",
 		columns: columns.map(colName),
+		columnNumbers: [...columns],
 		columnWidths: columns.map((c) => columnWidth(sheet, c)),
 		rows: new RowBuilder(wb, sheet, columns, rows).build(),
-		note: complete ? undefined : `Showing the first ${MAX_ROWS} rows. Add a range: line to show a different part.`,
+		note: [
+			complete ? "" : `Showing the first ${limit} visible rows (preview cell budget). Add a range: line to show a different part.`,
+			(pick && pick.length > 256) || (!area && (used?.right ?? 1) > right) || right - left + 1 > 256 ? "Showing the first 256 columns. Use range: or cols: to show other columns." : "",
+		].filter(Boolean).join(" ") || undefined,
 	};
 }
 
@@ -182,6 +204,7 @@ class RowBuilder {
 			row: r,
 			col: c,
 			text: formatValue(info.value, info.format),
+			link: this.sheet.hyperlink(r, c) ?? (typeof info.value === "string" ? safeLink(info.value) : undefined),
 			editText: editText(info.value, info.formula),
 			editable: !header,
 			numeric: typeof info.value === "number",
@@ -189,7 +212,7 @@ class RowBuilder {
 			pending,
 			options: rule?.options,
 			help: rule?.help,
-			hint: header ? "Table header: rename columns in Excel" : pending ? "Calculated the next time the file is opened in Excel" : rule?.help,
+			hint: header ? "Table header: rename columns in Excel" : info.formula ? `=${info.formula} · 显示 Excel 上次计算结果；修改数据后需在 Excel 中重新计算` : rule?.help,
 			tableHeader: header || undefined,
 			style: styleOf(info),
 		};

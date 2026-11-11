@@ -1,6 +1,6 @@
 # Excidian-dev
 
-## Development preview (0.3.0-dev)
+## Development preview (0.6.0-dev)
 
 Embed a workbook directly with Obsidian's attachment syntax:
 
@@ -15,7 +15,20 @@ names, aliases and link updates on rename use Obsidian's normal link resolution.
 
 Previews start **read-only**. Use the **eye / pencil** icon in the toolbar to switch the
 current preview. Settings → **Excidian-dev** → **默认只读模式** changes the default
-on this device. Read-only mode disables cell editing and hides the append row.
+on this device. Before entering edit mode, Excidian checks Excel's owner file.
+If the workbook is already open in Excel, the preview stays read-only and prompts
+**请先在 Excel 中关闭该文件，再切换到编辑模式**. This also applies to the
+configured editable default and `mode: edit` blocks. Close the workbook in Excel,
+then click the mode icon again. If Excel opens it during editing, owner-file
+notifications return the preview to read-only; save-time checks remain in place.
+The rightmost **spreadsheet icon** opens the original workbook with the desktop
+system's default application (for example Excel or WPS). Before opening, active
+cell editors are committed and pending saves finish; every preview of the same
+workbook switches to read-only. A failed save cancels opening, and a launch
+failure is reported while the previews remain read-only. This icon is available
+on desktop only and does not change the system's default file association.
+
+Read-only mode disables cell editing and hides the append row.
 An edit is saved when you press Enter/Tab, leave the cell, or change sheet/mode;
 Escape cancels it. Worksheet/mode choices are local to each preview and do not
 modify the note. Reloading the note uses the configured defaults again.
@@ -24,6 +37,86 @@ Existing `excidian` blocks still work, including `table`, `range`, `cols` and
 `headings`. Add `mode: readonly` or `mode: edit` to override the initial mode for
 one block. Sheet blocks have worksheet tabs; named table blocks retain their
 focused table view.
+
+### Everyday editing
+
+- Single-click to select a cell; drag or Shift-click to select a rectangle, including
+  in read-only mode. Double-click, F2 or Enter edits a selected cell. Typing replaces
+  its content. Arrow keys navigate, Shift+arrows extend selection, Home/End navigate
+  a row, and Cmd/Ctrl+Home/End navigate the preview. Enter/Tab commit and select
+  the next cell; Escape cancels.
+- Cmd/Ctrl+C copies displayed values as plain TSV. Cmd/Ctrl+V pastes a rectangular
+  region; a single pasted value fills the selected rectangle. Quoted tabs, multiline
+  cells and empty cells are supported. Delete/Backspace clears a rectangle without
+  moving its cells or changing formatting. A paste/clear saves once and undoes once.
+- A batch is limited to 10,000 cells and the currently displayed, consecutive region.
+  Insert sufficient rows/columns first. Merged cells, table headers, protected cells,
+  hidden/reordered row/column gaps and invalid Stop-validation values reject the
+  whole batch. Paste does not transfer rich formatting or adjust relative formulas.
+- Existing text, Text-formatted cells, leading-zero codes, long identifiers and
+  intentional spaces stay text. Numbers use at most 15 significant decimal digits;
+  longer input stays text. TRUE/FALSE become booleans in non-text cells. Prefix with
+  an apostrophe to force text. Date/time input preserves hours, seconds and milliseconds.
+- Use the magnifying glass or Cmd/Ctrl+F to search the visible worksheet. The
+  preview follows the row order and hidden rows saved by Excel, including saved
+  filter results. Change sorting or filtering in Excel and save the workbook.
+- In an active cell editor, **Alt+Enter** (Option+Enter on macOS) inserts a line
+  break. Enter saves and moves to the next cell; multiline values keep their
+  breaks and use Excel's wrap formatting. Click a dropdown cell in edit mode
+  to show all its choices right away.
+- Select cells in edit mode to use the formatting toolbar: bold, italic,
+  underline, strikethrough, fill and text color. Color chevrons open the palette;
+  the main color button reapplies its last color. Each command saves to the
+  workbook as one undoable change, preserving values, formulas and number formats.
+  Merged cells and protected sheets are excluded from formatting.
+- **自动换行** changes only the preview. Drag a column header's right edge to
+  resize it locally; double-click the edge to restore its width.
+  Cell tooltips show complete text. Web/email hyperlinks and plain URLs offer an
+  **打开链接** action in the cell's context menu; local/executable links are not exposed.
+
+Formulas display Excel's **last saved calculation**, including cached results that
+may become stale after inputs change. Formula tooltips and the preview note make
+this explicit. Excidian does not contain a calculation engine. Protected sheets
+and array/data-table formula cells must be edited in Excel. An Excel owner file
+blocks saving while Excel has the workbook open. Save-time byte checks and
+per-cell expected values reject detected external conflicts; this is not a
+cross-application locking or collaborative editing system.
+
+In editable **sheet previews**, click a row number or column letter to select it.
+Drag across headers or Shift-click to select a consecutive range. Right-click
+within that selection for **Insert**, **Delete** or **Clear contents**. Insert
+adds the same number of rows above, or columns to the left. These actions apply
+to entire rows/columns in the original worksheet, including cells outside a
+`range`/`cols` preview. Clear keeps formatting and Excel table header names.
+Delete/Backspace clears the selected rows/columns; Escape clears the selection.
+An unrestricted editable sheet includes an empty entry row and column for
+appending data. The viewport displays at most 5,000 rows, 256 existing columns and roughly
+30,000 cells (wide sheets show fewer rows);
+use a range or column selection to view other areas.
+
+The toolbar has workbook **Undo / Redo** buttons. Cmd/Ctrl+Z and
+Cmd/Ctrl+Shift+Z act on the workbook while its preview has focus. An input with
+unsaved text keeps normal input undo. History is shared by previews of the same
+file, stays in memory for the plugin session, and is limited to 20 changes per
+file and 32 MiB total. Restoring a snapshot refuses to overwrite an external edit.
+
+Existing Excel **frozen panes** are honored in both preview modes: leading rows
+stay at the top and leading columns stay at the left while scrolling inside the
+grid. Inserting/deleting before a frozen boundary updates that boundary too.
+
+Structural edits update A1 formulas (including absolute and cross-sheet refs),
+named ranges, merges, validation ranges/formulas, filters and table metadata.
+Calculated table columns fill inserted data rows. Excel recalculates formulas
+when the workbook is next opened; Excidian does not calculate formulas itself.
+Named-table previews retain cell editing but do not offer whole-sheet menus.
+
+Some structures require Excel: protected sheets, charts/drawings, comments,
+pivot/query/external dependencies, array/data-table formulas, dynamic
+INDIRECT/OFFSET and 3D references block structural edits with an explanation.
+Literal INDIRECT references to a table column remain supported. Deleting a
+table's header/totals row, its last data row or all its columns is blocked, as is
+deleting a table column used by structured formulas/names. No file is written
+when a structural edit is rejected. These limits do not disable frozen panes.
 
 For local installation, run `npm ci && npm run build`, then copy `main.js`,
 `manifest.json` and `styles.css` into `<vault>/.obsidian/plugins/excidian-dev/`
@@ -87,7 +180,7 @@ table: Movimenti
 ```
 ````
 
-The table's column names are the header, every row is shown (Excel filters are ignored), and the empty row at the bottom adds a row to the table. A table always fits the width of the note: its columns share the width in proportion to their Excel widths.
+The table's column names are the header, rows follow the saved order and Excel-hidden rows are omitted, and the empty row at the bottom adds a row to the table. A table always fits the width of the note: its columns share the width in proportion to their Excel widths.
 
 **Sheet**, whole or part of it. Best for summaries, budgets and dashboards:
 
@@ -155,7 +248,7 @@ Tips:
 
 ### Editing
 
-- Click a cell to edit it. **Enter** saves and moves down, **Tab** moves right (add Shift to go the other way), **Esc** cancels.
+- Double-click a cell or press F2/Enter to edit it. **Alt+Enter** inserts a line break. **Enter** saves and moves down, **Tab** moves right (add Shift to go the other way), **Esc** cancels.
 - The empty row at the bottom adds a new entry. For a table, the table grows by one row, the way typing below a table does in Excel. Calculated columns (like a running balance) are filled in, and the row gets the same formatting as the row above.
 - What you type is converted automatically:
   - `-45`, `12,50`, `1500.00` → number

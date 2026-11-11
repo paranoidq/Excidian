@@ -94,7 +94,9 @@
 	display: table;
 	width: 100%;
 	table-layout: fixed;
-	border-collapse: collapse;
+	/* Separate borders keep scrolling cells from bleeding through sticky panes. */
+	border-collapse: separate;
+	border-spacing: 0;
 	font-size: var(--font-ui-small);
 	font-variant-numeric: tabular-nums;
 	margin: 0;
@@ -103,6 +105,7 @@
 .excidian-table th,
 .excidian-table td {
 	border: 1px solid var(--background-modifier-border);
+	border-width: 0 1px 1px 0;
 	padding: 2px 8px;
 	height: 26px;
 	white-space: nowrap;
@@ -139,6 +142,39 @@
 
 .excidian-table td:hover {
 	background: var(--background-modifier-hover);
+}
+
+.excidian-table th[data-grid-column],
+.excidian-table th.excidian-rownum {
+	cursor: default;
+	user-select: none;
+}
+
+.excidian-table .excidian-frozen-row,
+.excidian-table .excidian-frozen-column {
+	position: sticky;
+	background-color: var(--background-primary);
+}
+
+.excidian-table th.excidian-frozen-row,
+.excidian-table th.excidian-frozen-column {
+	background-color: var(--background-secondary);
+}
+
+.excidian-table .excidian-selected,
+.excidian-table td.excidian-selected:hover {
+	background-color: var(--background-modifier-hover);
+	box-shadow: inset 0 0 0 1px var(--interactive-accent);
+}
+
+.excidian:focus-visible {
+	outline: 1px solid var(--interactive-accent);
+	outline-offset: 3px;
+}
+
+.excidian[aria-busy="true"] .excidian-wrap {
+	opacity: 0.7;
+	pointer-events: none;
 }
 
 .excidian-table td.excidian-num {
@@ -260,15 +296,21 @@
 	outline-offset: -2px;
 }
 
-.excidian-table td.excidian-editing input {
+.excidian-table td.excidian-editing textarea {
+	box-sizing: border-box;
+	display: block;
 	width: 100%;
-	height: 100%;
+	min-height: 26px;
+	padding: 3px 8px;
 	border: none;
 	border-radius: 0;
+	box-shadow: none;
 	background: var(--background-primary);
-	padding: 2px 8px;
-	font-size: inherit;
+	font: inherit;
+	line-height: 1.4;
+	resize: none;
 }
+
 
 .excidian-note {
 	margin-top: var(--size-4-1);
@@ -285,7 +327,7 @@
 
 /* The top-left corner stays above both the sticky header row and the row numbers. */
 .excidian-table thead th.excidian-corner {
-	z-index: 2;
+	z-index: 10;
 }
 
 .excidian-table col.excidian-col-rownum {
@@ -333,3 +375,52 @@
 .excidian-table td.excidian-align-justify {
 	text-align: justify;
 }
+
+/* Selection and tools belong to this preview in both Obsidian reading modes. */
+.excidian .excidian-table td { user-select: none; cursor: cell; }
+.excidian .excidian-table td.excidian-active-cell { outline: 2px solid var(--interactive-accent); outline-offset: -2px; }
+.excidian-tools { padding: 8px; margin: 4px 0 8px; background: var(--background-secondary); border-radius: var(--radius-s); font-size: var(--font-ui-small); }
+.excidian-tool-row { display: flex; align-items: center; gap: 6px; }
+.excidian-tools input[type="search"] { flex: 1 1 170px; min-width: 80px; }
+.excidian-find-result { color: var(--text-muted); white-space: nowrap; }
+.excidian-table td.excidian-multiline:not(.excidian-wrap-text) { white-space: pre; }
+.excidian-format { display: flex; align-items: center; gap: 2px; padding-inline-end: 4px; border-inline-end: 1px solid var(--background-modifier-border); }
+.excidian-format button[aria-pressed="true"], .excidian-wrap-toggle[aria-pressed="true"] {
+	background: var(--background-modifier-hover);
+	color: var(--text-accent);
+}
+.excidian-format button[aria-pressed="mixed"] { color: var(--text-accent); }
+.excidian-format-color { display: flex; position: relative; }
+.excidian-format-color .excidian-format-chevron { padding-inline: 0; }
+.excidian-format-chevron svg { width: 12px; }
+.excidian-format-current-color { position: relative; }
+.excidian-format-current-color::after {
+	content: "";
+	position: absolute;
+	bottom: 2px;
+	left: 20%;
+	right: 20%;
+	height: 3px;
+	border-radius: 2px;
+	background: var(--excidian-swatch);
+}
+.excidian-format-palette {
+	position: absolute;
+	z-index: var(--layer-popover);
+	inset-inline-end: 0;
+	top: calc(100% + 4px);
+	width: max-content;
+	padding: 8px;
+	border: 1px solid var(--background-modifier-border);
+	border-radius: var(--radius-s);
+	background: var(--background-primary);
+	box-shadow: var(--shadow-s);
+}
+.excidian-format-swatches { display: grid; grid-template-columns: repeat(8, 20px); gap: 4px; margin-bottom: 8px; }
+.excidian-format-swatches .excidian-format-swatch { width: 20px; height: 20px; padding: 0; border: 1px solid var(--background-modifier-border); border-radius: 3px; box-shadow: none; }
+.excidian-format-swatch:hover, .excidian-format-swatch:focus-visible { outline: 2px solid var(--interactive-accent); outline-offset: 1px; }
+.excidian-wrap-all .excidian-table td, .excidian-wrap-all .excidian-table td.excidian-multiline:not(.excidian-wrap-text) { white-space: pre-wrap; overflow-wrap: anywhere; text-overflow: clip; }
+.excidian-table th[data-grid-column] { padding-right: 10px; }
+.excidian-resize { position: absolute; top: 0; right: 0; bottom: 0; width: 7px; cursor: col-resize; touch-action: none; }
+.excidian-resize:hover { background: var(--interactive-accent); opacity: .5; }
+.excidian-table td.excidian-link { color: var(--text-accent); text-decoration: underline; text-underline-offset: 2px; }

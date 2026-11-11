@@ -1,4 +1,4 @@
-import { Platform, Plugin } from "obsidian";
+import { Platform, Plugin, Scope } from "obsidian";
 import { ControllerContext, SheetController } from "./controller/sheet-controller";
 import { DeviceSettings } from "./model/device-settings";
 import type { FileResolver } from "./model/storage";
@@ -29,7 +29,19 @@ export default class ExcidianPlugin extends Plugin {
 			resolver = new VaultResolver(this.app);
 		}
 
-		const context: ControllerContext = { settings, resolver, active: new Set() };
+		const context: ControllerContext = {
+			settings, resolver, active: new Set(),
+			registerCellShortcut: (input, insertLineBreak) => {
+				const scope = new Scope(this.app.scope);
+				scope.register(["Alt"], "Enter", (event) => {
+					if (event.target !== input || event.isComposing) return;
+					insertLineBreak();
+					return false;
+				});
+				this.app.keymap.pushScope(scope);
+				return () => this.app.keymap.popScope(scope);
+			},
+		};
 
 		this.addSettingTab(
 			new ExcidianSettingTab(this.app, this, {

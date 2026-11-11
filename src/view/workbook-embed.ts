@@ -1,6 +1,5 @@
 import { MarkdownRenderChild, Plugin, TFile } from "obsidian";
 import { SheetController, type ControllerContext } from "../controller/sheet-controller";
-import { VaultFile } from "../platform/vault-file";
 
 interface EmbedContext {
 	containerEl: HTMLElement;
@@ -17,6 +16,7 @@ interface EmbedRegistry {
 class WorkbookEmbed extends MarkdownRenderChild {
 	private controller?: SheetController;
 	private loaded = false;
+	private mountedPath?: string;
 
 	constructor(
 		private plugin: Plugin,
@@ -39,9 +39,11 @@ class WorkbookEmbed extends MarkdownRenderChild {
 	}
 
 	loadFile(file?: TFile) {
-		if (file && file.path !== this.file.path) {
+		if (file) {
+			if (file !== this.file && file.path !== this.file.path) this.subpath = undefined;
 			this.file = file;
-			this.subpath = undefined;
+		}
+		if (this.controller && this.file.path !== this.mountedPath) {
 			if (this.controller) this.removeChild(this.controller);
 			this.controller = undefined;
 		}
@@ -50,6 +52,7 @@ class WorkbookEmbed extends MarkdownRenderChild {
 
 	private mount() {
 		if (this.controller) return;
+		this.mountedPath = this.file.path;
 		this.containerEl.empty();
 		this.containerEl.addClass("excidian-embed");
 		this.controller = this.addChild(new SheetController(
@@ -59,8 +62,9 @@ class WorkbookEmbed extends MarkdownRenderChild {
 			{
 				...this.context,
 				// The registry already resolves wiki links (short names, relative links,
-				// aliases and renamed files). Use the vault API for the exact target.
-				resolver: { resolve: () => new VaultFile(this.plugin.app, this.file.path) },
+				// aliases and renamed files). Keep the platform resolver so a code
+				// block and wiki embed of the same file share save queues and undo.
+				resolver: { resolve: () => this.context.resolver.resolve(this.file.path, this.sourcePath) },
 			},
 		));
 	}

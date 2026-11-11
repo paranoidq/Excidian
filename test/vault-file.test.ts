@@ -106,3 +106,16 @@ describe("workbooks in the vault", () => {
 		assert.equal(handlers.length, 0);
 	});
 });
+
+it("watches Excel owner-file creation/deletion as well as workbook changes", async () => {
+	const { app, emit } = fakeVault({ "Finance/bank.xlsx": new Uint8Array([1]) });
+	let calls = 0; const stop = new VaultFile(app, "Finance/bank.xlsx").watch(() => calls++);
+	try {
+		emit("Finance/~$bank.xlsx");
+		await new Promise((resolve) => setTimeout(resolve, 350));
+		assert.equal(calls, 1);
+		emit("Finance/~$nk.xlsx");
+		await new Promise((resolve) => setTimeout(resolve, 350));
+		assert.equal(calls, 2);
+	} finally { stop(); }
+});

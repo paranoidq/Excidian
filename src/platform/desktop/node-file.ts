@@ -1,7 +1,7 @@
 // Desktop only: a workbook anywhere on the computer, read and written with Node's fs.
 import * as fs from "fs";
 import * as path from "path";
-import { isConflictCopyName, SiblingFile, StoredFile } from "../../model/storage";
+import { isConflictCopyName, isExcelOwnerName, SiblingFile, StoredFile } from "../../model/storage";
 
 export class NodeFile implements StoredFile {
 	readonly id: string;
@@ -14,6 +14,13 @@ export class NodeFile implements StoredFile {
 		this.displayPath = absolutePath;
 		this.name = path.basename(absolutePath);
 		this.dir = path.dirname(absolutePath);
+	}
+
+	async openLocal(): Promise<void> {
+		type Electron = { shell: { openPath(path: string): Promise<string> } };
+		const { shell } = (window as unknown as { require(module: string): Electron }).require("electron");
+		const error = await shell.openPath(this.id);
+		if (error) throw new Error(error);
 	}
 
 	async read(): Promise<Uint8Array> {
@@ -66,7 +73,7 @@ export class NodeFile implements StoredFile {
 		try {
 			watcher = fs.watch(this.dir, (_event, changed) => {
 				const name = changed?.toString();
-				if (name && name !== this.name && !isConflictCopyName(this.name, name)) return;
+				if (name && name !== this.name && !isConflictCopyName(this.name, name) && !isExcelOwnerName(this.name, name)) return;
 				window.clearTimeout(timer);
 				timer = window.setTimeout(onChange, 300);
 			});

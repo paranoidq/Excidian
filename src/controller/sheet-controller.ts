@@ -1,16 +1,21 @@
 import { MarkdownRenderChild, Notice } from "obsidian";
 import type { DeviceSettings } from "../model/device-settings";
-import { formatRef } from "../model/ooxml/refs";
+import type { CellStylePatch } from "../model/ooxml/styles";
+import { formatRef, inRange } from "../model/ooxml/refs";
+import type { StructureEdit } from "../model/ooxml/structure-refs";
 import type { FileResolver, SiblingFile, StoredFile } from "../model/storage";
 import type { ValidationIssue } from "../model/validation";
-import { CellInput, parseInput } from "../model/values";
+import { CellInput, editText, parseInput } from "../model/values";
 import type { Sheet } from "../model/sheet";
 import type { TableLocation, Workbook } from "../model/workbook";
-import { findConflictCopies, isOpenInExcel, readWorkbook, updateWorkbook } from "../model/workbook-store";
+import { findConflictCopies, isOpenInExcel, readWorkbook, restoreWorkbook, updateWorkbook, workbookHistory } from "../model/workbook-store";
+import type { CellChange } from "../view/grid-tools";
 import type { CellData, GridData, WarningData } from "../view/grid-data";
 import { GridView } from "../view/grid-view";
 import { BlockConfig, parseBlockConfig } from "./block-config";
 import { buildGrid } from "./grid-builder";
+
+const EXCEL_OPEN_MESSAGE = "该文件已在 Excel 中打开，Excidian 已保持只读。请先在 Excel 中关闭该文件，再切换到编辑模式。";
 
 /** Services the plugin shares with every code block. */
 export interface ControllerContext {
@@ -19,6 +24,7 @@ export interface ControllerContext {
 	resolver: FileResolver;
 	/** Controllers currently on screen, so settings changes can restart them. */
 	active: Set<SheetController>;
+	registerCellShortcut?: (input: HTMLTextAreaElement, insertLineBreak: () => void) => () => void;
 }
 
 /** Connects one excidian code block to its workbook: loads it, shows it, saves edits. */
@@ -29,13 +35,19 @@ export class SheetController extends MarkdownRenderChild {
 	private grid?: GridData;
 	private conflicts: SiblingFile[] = [];
 	private stopWatching?: () => void;
+	private reloadTimer?: number;
 	private ignoreChangesUntil = 0;
-	private warnedOpenInExcel = false;
 	private workbook?: Workbook;
 	private selectedSheet?: string;
 	private readOnly = true;
+	private initialEditRequested = false;
+	private checkingMode = false;
+	private modeGeneration = 0;
 	private generation = 0;
 	private stopped = true;
+	private busy = false;
+	private saves = new Set<Promise<void>>();
+	private saveFailures = 0;
 
 	constructor(
 		containerEl: HTMLElement,
@@ -50,11 +62,18 @@ export class SheetController extends MarkdownRenderChild {
 				this.selectedSheet = sheet;
 				this.render();
 			},
-			onModeChange: (readOnly) => {
-				this.readOnly = readOnly;
-				this.render();
+			onModeChange: (readOnly) => this.changeMode(readOnly),
+			onCommit: (cell, text) => {
+				const save = this.commit(cell, text);
+				this.saves.add(save);
+				void save.finally(() => this.saves.delete(save));
 			},
-			onCommit: (cell, text) => void this.commit(cell, text),
+			registerCellShortcut: this.context.registerCellShortcut,
+			onFormat: (cells, patch) => void this.formatCells(cells, patch),
+			onBatchCommit: (changes) => void this.batchCommit(changes),
+			onStructure: (edit) => void this.structure(edit),
+			onHistory: (direction) => void this.history(direction),
+			onOpenLocal: () => void this.openLocally(),
 			onRefresh: () => void this.reload(),
 			onWarningAction: (warningId, actionId) => this.onWarningAction(warningId, actionId),
 		});
@@ -80,7 +99,9 @@ export class SheetController extends MarkdownRenderChild {
 	private start() {
 		try {
 			this.cfg = typeof this.source === "string" ? parseBlockConfig(this.source) : this.source;
-			this.readOnly = this.cfg.mode ? this.cfg.mode === "readonly" : this.context.settings.defaultReadOnly;
+			this.initialEditRequested = this.cfg.mode ? this.cfg.mode === "edit" : !this.context.settings.defaultReadOnly;
+			// Never expose editable cells before the initial ownership check finishes.
+			this.readOnly = true;
 			this.file = this.context.resolver.resolve(this.cfg.file, this.notePath);
 		} catch (e) {
 			this.cfg = undefined;
@@ -89,32 +110,107 @@ export class SheetController extends MarkdownRenderChild {
 			return;
 		}
 		this.stopped = false;
-		this.stopWatching = this.file.watch(() => {
-			// Our own saves also change the file; those are already on screen.
-			if (Date.now() >= this.ignoreChangesUntil) void this.reload();
-		});
+		this.stopWatching = this.file.watch(() => this.queueReload());
 		void this.reload();
 	}
 
 	private stop() {
 		this.stopped = true;
 		this.generation++;
+		this.modeGeneration++;
+		this.checkingMode = false;
 		this.view.cancelEdit();
+		window.clearTimeout(this.reloadTimer);
 		this.stopWatching?.();
 		this.stopWatching = undefined;
+	}
+
+	/** Defer our own save notifications, rather than dropping nearby external changes. */
+	private queueReload() {
+		window.clearTimeout(this.reloadTimer);
+		if (this.stopped) return;
+		this.reloadTimer = window.setTimeout(() => {
+			if (this.busy || this.saves.size || Date.now() < this.ignoreChangesUntil) this.queueReload();
+			else void this.reload();
+		}, 300);
 	}
 
 	private async reload() {
 		if (!this.cfg || !this.file || this.stopped) return;
 		const generation = ++this.generation;
 		try {
-			const wb = await readWorkbook(this.file);
-			const conflicts = await findConflictCopies(this.file);
+			const [wb, conflicts, openInExcel] = await Promise.all([
+				readWorkbook(this.file), findConflictCopies(this.file), isOpenInExcel(this.file),
+			]);
 			if (this.stopped || generation !== this.generation) return;
 			this.conflicts = conflicts;
+			const wantsEdit = this.initialEditRequested || !this.readOnly;
+			this.initialEditRequested = false;
+			if (openInExcel && wantsEdit) {
+				this.modeGeneration++; this.checkingMode = false;
+				this.readOnly = true; this.view.cancelEdit();
+				new Notice(`Excidian: ${EXCEL_OPEN_MESSAGE}`, 8000);
+			} else if (wantsEdit) this.readOnly = false;
 			this.show(wb);
 		} catch (e) {
 			if (!this.stopped && generation === this.generation) this.view.showError(errorMessage(e));
+		}
+	}
+
+	private async changeMode(readOnly: boolean) {
+		if (this.stopped || !this.file || this.busy) return;
+		if (readOnly) {
+			this.modeGeneration++; this.checkingMode = false;
+			this.initialEditRequested = false;
+			this.readOnly = true; this.view.cancelEdit(); this.render();
+			return;
+		}
+		if (!this.readOnly || this.checkingMode) return;
+		const file = this.file, generation = ++this.modeGeneration;
+		const current = () => !this.stopped && this.file === file && this.modeGeneration === generation;
+		this.checkingMode = true; this.render();
+		try {
+			const openInExcel = await isOpenInExcel(file);
+			if (!current()) return;
+			if (openInExcel) new Notice(`Excidian: ${EXCEL_OPEN_MESSAGE}`, 8000);
+			else this.readOnly = false;
+		} catch (error) {
+			if (current()) new Notice(`Excidian: 无法确认文件是否被 Excel 占用，已保持只读。${errorMessage(error)}`, 8000);
+		} finally {
+			if (current()) { this.checkingMode = false; this.render(); }
+		}
+	}
+
+	private async openLocally() {
+		const file = this.file;
+		if (this.stopped || this.busy || !file?.openLocal) return;
+		const controllers = [...new Set([this, ...this.context.active])].filter((controller) => !controller.stopped && controller.file?.id === file.id);
+		if (controllers.some((controller) => controller.busy)) {
+			new Notice("Excidian: 文件正在保存，请稍后再用本地程序打开。", 6000);
+			return;
+		}
+		const failures = controllers.map((controller) => controller.saveFailures);
+		// Finish every editor for this workbook before locking all of its previews.
+		for (const controller of controllers) controller.view.finishEdit();
+		for (const controller of controllers) {
+			controller.modeGeneration++; controller.checkingMode = false;
+			controller.initialEditRequested = false; controller.readOnly = true;
+			controller.busy = true; controller.view.cancelEdit(); controller.render();
+		}
+		try {
+			await Promise.all(controllers.flatMap((controller) => [...controller.saves]));
+			if (this.stopped || this.file !== file) return;
+			if (controllers.some((controller, index) => controller.saveFailures !== failures[index])) {
+				throw new Error("有修改未保存成功，未打开本地程序。请处理保存提示后重试。");
+			}
+			await file.openLocal();
+		} catch (error) {
+			if (!this.stopped && this.file === file) new Notice(`Excidian: 无法用本地程序打开。${errorMessage(error)}`, 8000);
+		} finally {
+			for (const controller of controllers) {
+				controller.busy = false;
+				if (!controller.stopped) controller.render();
+			}
 		}
 	}
 
@@ -138,8 +234,49 @@ export class SheetController extends MarkdownRenderChild {
 
 	private render() {
 		if (!this.workbook || this.stopped) return;
-		this.grid = { ...buildGrid(this.workbook, this.effectiveConfig(), this.readOnly), tooltip: this.file!.displayPath, warnings: this.conflictWarnings() };
+		const history = workbookHistory(this.file!);
+		this.grid = {
+			...buildGrid(this.workbook, this.effectiveConfig(), this.readOnly, true),
+			tooltip: this.file!.displayPath, warnings: this.conflictWarnings(), busy: this.busy || this.checkingMode,
+			canOpenLocal: !!this.file!.openLocal,
+			canUndo: history.undo, canRedo: history.redo,
+		};
 		this.view.render(this.grid);
+	}
+
+	private async structure(edit: StructureEdit) {
+		if (this.readOnly || this.busy || this.stopped || !this.file || this.cfg?.target.kind !== "sheet") return;
+		const sheet = this.selectedSheet!;
+		await this.mutate(async (file) => updateWorkbook(file, (wb) => wb.editStructure(sheet, edit)));
+	}
+
+	private async history(direction: "undo" | "redo") {
+		if (this.readOnly || this.busy || this.stopped || !this.file) return;
+		await this.mutate((file) => restoreWorkbook(file, direction));
+	}
+
+	private async mutate(action: (file: StoredFile) => Promise<Workbook>) {
+		const file = this.file!;
+		this.busy = true; this.view.cancelEdit(); this.render();
+		try {
+			await Promise.all([...this.saves]);
+			if (this.stopped || file !== this.file) return;
+			this.ignoreChangesUntil = Date.now() + 10_000;
+			if (await isOpenInExcel(file)) { this.readOnly = true; throw new Error(EXCEL_OPEN_MESSAGE); }
+			const wb = await action(file);
+			if (this.stopped || file !== this.file) return;
+			this.generation++;
+			this.show(wb);
+			// Update other embeds immediately, including those suppressing a recent own save.
+			for (const controller of this.context.active) if (controller !== this && controller.file?.id === file.id) void controller.reload();
+			this.view.setStatus("已保存");
+		} catch (error) {
+			new Notice(`Excidian: ${errorMessage(error)}`, 8000);
+			if (!this.stopped && file === this.file) await this.reload();
+		} finally {
+			this.busy = false; this.ignoreChangesUntil = Date.now() + 300;
+			if (!this.stopped && file === this.file) this.render();
+		}
 	}
 
 	private conflictWarnings(): WarningData[] {
@@ -176,22 +313,70 @@ export class SheetController extends MarkdownRenderChild {
 		}
 	}
 
+	private async formatCells(cells: CellData[], patch: CellStylePatch) {
+		if (this.readOnly || this.busy || this.stopped || !this.file || !this.cfg || !cells.length) return;
+		const cfg = this.effectiveConfig();
+		await this.mutate((file) => updateWorkbook(file, (wb) => {
+			if (cells.length > 10_000) throw new Error("每次最多设置 10,000 个单元格的格式。");
+			const sheet = cfg.target.kind === "sheet" ? wb.sheet(cfg.target.sheet) : wb.table(cfg.target.table).sheet;
+			const merges = sheet.mergedRanges();
+			for (const cell of cells) {
+				if (sheet.isRowHidden(cell.row) || merges.some((range) => inRange(range, cell.row, cell.col))) throw new Error("选区包含隐藏行或合并单元格，请刷新后重新选择。");
+				assertUnchanged(sheet, cell);
+				sheet.formatCell(cell.row, cell.col, patch);
+			}
+		}, { recalculate: false }));
+	}
+
+	private async batchCommit(changes: CellChange[]) {
+		if (this.readOnly || this.busy || this.stopped || !this.file || !this.cfg || !changes.length) return;
+		const cfg = this.effectiveConfig();
+		let warnings = 0;
+		await this.mutate((file) => updateWorkbook(file, (wb) => {
+			if (changes.length > 10_000) throw new Error("每次最多修改 10,000 个单元格。");
+			const seen = new Set<string>();
+			// Check all expected values before applying any in-memory table expansion.
+			for (const { cell } of changes) assertUnchanged(editTarget(wb, cfg, cell).sheet, cell);
+			for (const { cell, text } of changes) {
+				if (!cell.editable) throw new Error("区域含只读单元格。");
+				const ref = formatRef(cell.row, cell.col);
+				if (seen.has(ref)) throw new Error("区域包含重复单元格。");
+				seen.add(ref);
+				const { sheet } = editTarget(wb, cfg, cell);
+				if (sheet.mergedRanges().some((range) => cell.row >= range.top && cell.row <= range.bottom && cell.col >= range.left && cell.col <= range.right)) throw new Error("区域含合并单元格，请在普通数据区域粘贴。");
+				if (sheet.isTableHeader(cell.row, cell.col)) throw new Error("请在 Excel 中修改表格标题。");
+				sheet.assertWritable(cell.row, cell.col);
+				const input = parseInput(text, sheet.cell(cell.row, cell.col));
+				const issue = checkEdit(wb, cfg, cell, input);
+				if (issue?.blocking) throw new Error(`${ref}: ${issueText(issue)}（整个区域未保存）`);
+				if (issue) warnings++;
+				// Changes remain in memory until every cell has passed validation.
+				applyEdit(wb, cfg, cell, input);
+			}
+		}));
+		if (warnings) new Notice(`Excidian: ${warnings} 个单元格未满足提示性验证规则，请检查。`, 8000);
+	}
+
 	private async commit(cell: CellData, text: string) {
-		if (this.readOnly || !cell.editable || this.stopped || !this.cfg || !this.file) return;
+		if (this.readOnly || this.busy || !cell.editable || this.stopped || !this.cfg || !this.file) return;
 		// Capture the sheet now: switching tabs during an async save must never redirect an edit.
 		const cfg = this.effectiveConfig();
 		const file = this.file!;
-		const input = parseInput(text);
+
 
 		this.ignoreChangesUntil = Date.now() + 10_000;
 		let warning = null as ValidationIssue | null;
 		try {
-			if (!this.warnedOpenInExcel && (await isOpenInExcel(file))) {
-				this.warnedOpenInExcel = true;
-				new Notice("Excidian: this file is open in Excel. Saving there will overwrite edits made here; close it or reload it in Excel.", 8000);
+			if (await isOpenInExcel(file)) {
+				this.readOnly = true;
+				throw new Error(EXCEL_OPEN_MESSAGE);
 			}
 			const wb = await updateWorkbook(file, (wb) => {
-				// Checked against the fresh file, right before writing.
+				// Interpret using the fresh cell type/format, right before writing.
+				const { sheet } = editTarget(wb, cfg, cell);
+				assertUnchanged(sheet, cell);
+				const input = parseInput(text, sheet.cell(cell.row, cell.col));
+				if (sheet.isTableHeader(cell.row, cell.col)) throw new Error("请在 Excel 中修改表格标题。");
 				const issue = checkEdit(wb, cfg, cell, input);
 				if (issue?.blocking) throw new Error(issueText(issue));
 				warning = issue;
@@ -201,10 +386,12 @@ export class SheetController extends MarkdownRenderChild {
 			this.generation++;
 			this.show(wb);
 			this.view.setStatus(`Saved ${formatRef(cell.row, cell.col)}`);
+			for (const controller of this.context.active) if (controller !== this && controller.file?.id === file.id) void controller.reload();
 			if (warning) new Notice(`Excidian: saved, but ${issueText(warning)}`, 8000);
 		} catch (e) {
+			this.saveFailures++;
 			new Notice(`Excidian: could not save ${formatRef(cell.row, cell.col)}: ${errorMessage(e)}`);
-			if (!this.stopped && file === this.file && this.grid) this.view.render(this.grid);
+			if (!this.stopped && file === this.file) await this.reload();
 		} finally {
 			this.ignoreChangesUntil = Date.now() + 1000;
 		}
@@ -243,4 +430,9 @@ function applyEdit(wb: Workbook, cfg: BlockConfig, cell: CellData, input: CellIn
 
 function errorMessage(e: unknown): string {
 	return e instanceof Error ? e.message : String(e);
+}
+
+function assertUnchanged(sheet: Sheet, cell: CellData) {
+	const current = sheet.cell(cell.row, cell.col);
+	if (editText(current.value, current.formula) !== cell.editText) throw new Error(`${formatRef(cell.row, cell.col)} 已被其他预览或程序修改，请刷新后重试。`);
 }

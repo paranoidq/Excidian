@@ -140,7 +140,7 @@ describe("helpers", () => {
 		assert.deepEqual(parseInput("12,50"), { kind: "number", value: 12.5 });
 		assert.deepEqual(parseInput("=SUM(A1:A3)"), { kind: "formula", formula: "SUM(A1:A3)" });
 		assert.deepEqual(parseInput("31/02/2026"), { kind: "text", value: "31/02/2026" });
-		assert.deepEqual(parseInput("  "), { kind: "empty" });
+		assert.deepEqual(parseInput("  "), { kind: "text", value: "  " });
 	});
 
 	it("formats numbers and dates", () => {

@@ -19,6 +19,8 @@ export interface StoredFile {
 	readonly name: string;
 	/** Where the file is, for tooltips and messages. */
 	readonly displayPath: string;
+	/** Open with the OS default application, where the platform supports it. */
+	openLocal?(): Promise<void>;
 	read(): Promise<Uint8Array>;
 	/** Replaces the file's content, as safely as the platform allows. */
 	write(bytes: Uint8Array): Promise<void>;
@@ -84,4 +86,9 @@ export function resolveInVault(spec: string, notePath: string): string {
 	}
 	if (!parts.length) throw new Error(`"${s}" isn't a file.`);
 	return parts.join("/");
+}
+
+/** Excel's owner file can retain the whole name or omit its first two characters. */
+export function isExcelOwnerName(fileName: string, candidate: string): boolean {
+	return candidate === `~$${fileName}` || candidate === `~$${fileName.slice(2)}`;
 }

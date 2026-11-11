@@ -39,6 +39,17 @@ describe("workbook previews", () => {
 		assert.throws(() => parseBlockConfig("file: demo.xlsx\nmode: edti"), /Invalid `mode:`/);
 	});
 
+	it("offers an entry column only in unrestricted editable sheet previews", async () => {
+		const wb = await Workbook.load(await financeWorkbook());
+		const cfg = parseBlockConfig("file: demo.xlsx\nsheet: 2026");
+		const grid = buildGrid(wb, cfg, false, true);
+		assert.equal(grid.columns[grid.columns.length - 1], "F");
+		assert.equal(grid.columnNumbers![grid.columnNumbers!.length - 1], 6);
+		assert.equal(grid.rows[1].cells[5].editable, true);
+		assert.equal(buildGrid(wb, cfg, true, true).columns.length, 5);
+		assert.equal(buildGrid(wb, parseBlockConfig("file: demo.xlsx\nsheet: 2026\ncols: A:C"), false, true).columns.length, 3);
+	});
+
 	it("defaults to read-only and persists the configurable default without losing other settings", () => {
 		const values = new Map<string, unknown>();
 		const store = { load: (key: string) => values.get(key), save: (key: string, value: unknown) => { values.set(key, value); } };
@@ -52,4 +63,16 @@ describe("workbook previews", () => {
 		again.defaultReadOnly = true;
 		assert.equal(settings.defaultReadOnly, true);
 	});
+});
+
+it("bounds wide worksheet previews instead of constructing a million DOM cells", async () => {
+	const { Package } = await import("../src/model/ooxml/package");
+	const { child } = await import("../src/model/ooxml/xml");
+	const pkg = await Package.load(await financeWorkbook());
+	child(pkg.xml("xl/worksheets/sheet1.xml")!.documentElement, "dimension")!.setAttribute("ref", "A1:IV5000");
+	pkg.markDirty("xl/worksheets/sheet1.xml");
+	const grid = buildGrid(await Workbook.load(await pkg.toBytes()), parseBlockConfig("file: demo.xlsx"), true, true);
+	assert.ok(grid.rows.length * grid.columns.length <= 30_000);
+	assert.ok(grid.rows.length < 5000);
+	assert.match(grid.note!, /preview cell budget/);
 });

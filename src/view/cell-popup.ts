@@ -13,11 +13,12 @@ export class CellPopup {
 	private listEl?: HTMLElement;
 	private shown: PopupOption[] = [];
 	private active = -1;
+	private resizeObserver: ResizeObserver;
 	private reposition = () => this.position();
 
 	constructor(
 		private anchor: HTMLElement,
-		private input: HTMLInputElement,
+		private input: HTMLTextAreaElement,
 		private options: PopupOption[],
 		help: string | undefined,
 		private onPick: (value: string) => void,
@@ -36,6 +37,8 @@ export class CellPopup {
 		}
 
 		this.position();
+		this.resizeObserver = new ResizeObserver(this.reposition);
+		this.resizeObserver.observe(anchor);
 		doc.addEventListener("scroll", this.reposition, true);
 		doc.defaultView?.addEventListener("resize", this.reposition);
 	}
@@ -56,6 +59,7 @@ export class CellPopup {
 
 	destroy() {
 		const doc = this.anchor.ownerDocument;
+		this.resizeObserver.disconnect();
 		doc.removeEventListener("scroll", this.reposition, true);
 		doc.defaultView?.removeEventListener("resize", this.reposition);
 		this.el.remove();
@@ -74,7 +78,7 @@ export class CellPopup {
 		this.shown = options;
 		this.listEl!.empty();
 		if (!options.length) {
-			this.listEl!.createDiv({ cls: "excidian-popup-empty", text: "No matching choice" });
+			this.listEl!.createDiv({ cls: "excidian-popup-empty", text: "没有匹配的选项" });
 		}
 		options.forEach((option) => {
 			const item = this.listEl!.createDiv({ cls: "excidian-popup-item", text: option.label });
@@ -94,8 +98,10 @@ export class CellPopup {
 
 	private position() {
 		const rect = this.anchor.getBoundingClientRect();
-		const viewport = this.anchor.ownerDocument.defaultView?.innerHeight ?? 800;
-		this.el.setCssStyles({ left: `${rect.left}px`, minWidth: `${rect.width}px` });
+		const win = this.anchor.ownerDocument.defaultView;
+		const viewport = win?.innerHeight ?? 800, viewportWidth = win?.innerWidth ?? 1200;
+		const width = Math.min(Math.max(rect.width, 160), 360, viewportWidth - 16);
+		this.el.setCssStyles({ left: `${Math.max(8, Math.min(rect.left, viewportWidth - width - 8))}px`, width: `${width}px` });
 		// Open upwards when there isn't room below.
 		const below = viewport - rect.bottom;
 		const height = this.el.offsetHeight;
