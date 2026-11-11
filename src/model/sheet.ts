@@ -1,7 +1,7 @@
 import { safeLink } from "./hyperlinks";
 import { shiftFormula } from "./ooxml/formula";
 import type { Package } from "./ooxml/package";
-import { formatRange, formatRef, inRange, MAX_COL, MAX_ROW, parseRange, parseRef, Range } from "./ooxml/refs";
+import { type CellRef, formatRange, formatRef, inRange, MAX_COL, MAX_ROW, parseRange, parseRef, Range, rangesOverlap } from "./ooxml/refs";
 import type { CellFormat, CellStylePatch, Styles } from "./ooxml/styles";
 import { child, createChild, elements, removeChildren, richText, setText, textOf } from "./ooxml/xml";
 import type { Table } from "./table";
@@ -26,6 +26,9 @@ export interface ColumnInfo {
 
 // Excel's width of a column nobody resized (Calibri 11).
 const DEFAULT_COLUMN_WIDTH = 8.43;
+const BEFORE_MERGE_CELLS = new Set([
+	"sheetData", "sheetCalcPr", "sheetProtection", "protectedRanges", "scenarios", "autoFilter", "sortState", "dataConsolidate", "customSheetViews",
+]);
 
 /** Workbook-wide data a sheet needs to read and write cells. */
 export interface SheetContext {
@@ -206,18 +209,71 @@ export class Sheet {
 		return bottom ? { top: 1, left: 1, bottom, right } : null;
 	}
 
-	/** Includes explicitly inserted blank rows/columns, unlike the content range. */
+	/** Includes blank rows and columns reserved by the worksheet or a merge. */
 	displayRange(): Range | null {
 		const ref = child(this.root, "dimension")?.getAttribute("ref");
 		const used = this.usedRange();
-		if (!ref) return used;
-		const dimension = parseRange(ref);
-		return { top: 1, left: 1, bottom: Math.max(used?.bottom ?? 1, dimension.bottom), right: Math.max(used?.right ?? 1, dimension.right) };
+		const dimension = ref ? parseRange(ref) : undefined;
+		let bottom = Math.max(used?.bottom ?? 0, dimension?.bottom ?? 0);
+		let right = Math.max(used?.right ?? 0, dimension?.right ?? 0);
+		for (const merge of this.mergedRanges()) {
+			bottom = Math.max(bottom, merge.bottom);
+			right = Math.max(right, merge.right);
+		}
+		return bottom && right ? { top: 1, left: 1, bottom, right } : null;
 	}
 
 	mergedRanges(): Range[] {
 		const list = child(this.root, "mergeCells");
 		return (list ? elements(list, "mergeCell") : []).map((m) => parseRange(m.getAttribute("ref") ?? "A1"));
+	}
+
+	mergeCells(range: Range, clearOtherCells = false) {
+		const { top, left, bottom, right } = range;
+		const size = (bottom - top + 1) * (right - left + 1);
+		if (![top, left, bottom, right].every(Number.isInteger) || top < 1 || left < 1 || bottom > MAX_ROW || right > MAX_COL || bottom < top || right < left || size < 2 || size > 10_000) {
+			throw new Error("请选择 2 至 10,000 个相邻单元格。");
+		}
+		if (this.mergedRanges().some((merge) => rangesOverlap(merge, range))) throw new Error("选区包含已合并的单元格，请先取消合并。");
+		if (this.tables.some((table) => rangesOverlap(table.ref, range))) throw new Error("Excel 表格内不能合并单元格。");
+		for (let col = left; col <= right; col++) {
+			if (this.column(col).hidden) throw new Error("请先显示选区内的隐藏列。");
+		}
+		const contents: CellRef[] = [];
+		for (let row = top; row <= bottom; row++) {
+			if (this.isRowHidden(row)) throw new Error("请先显示选区内的隐藏行。");
+			for (let col = left; col <= right; col++) {
+				this.assertWritable(row, col);
+				if ((row !== top || col !== left) && this.hasContent(row, col)) contents.push({ row, col });
+			}
+		}
+		if (contents.length && !clearOtherCells) throw new Error("左上角以外的单元格仍有内容，请确认后再合并。");
+		for (const { row, col } of contents) this.setCell(row, col, { kind: "empty" });
+
+		let list = child(this.root, "mergeCells");
+		if (!list) {
+			const preceding = elements(this.root).filter((el) => BEFORE_MERGE_CELLS.has(el.localName)).pop()!;
+			list = createChild(this.root, "mergeCells", preceding.nextSibling);
+		}
+		createChild(list, "mergeCell").setAttribute("ref", formatRange(range));
+		list.setAttribute("count", String(elements(list, "mergeCell").length));
+		this.growDimension(bottom, right);
+		this.markDirty();
+	}
+
+	unmergeCells(ranges: Range[]) {
+		if (!ranges.length) return;
+		const list = child(this.root, "mergeCells");
+		const current = list ? elements(list, "mergeCell") : [];
+		const wanted = new Set(ranges.map(formatRange));
+		const selected = current.filter((el) => wanted.has(formatRange(parseRange(el.getAttribute("ref") ?? "A1"))));
+		if (!list || selected.length !== wanted.size) throw new Error("合并区域已变化，请刷新后重试。");
+		for (const { top, left } of ranges) this.assertWritable(top, left);
+		for (const el of selected) list.removeChild(el);
+		const remaining = current.length - selected.length;
+		if (remaining) list.setAttribute("count", String(remaining));
+		else this.root.removeChild(list);
+		this.markDirty();
 	}
 
 	private readValue(el: Element, style: number): CellValue {

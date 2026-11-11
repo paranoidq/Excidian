@@ -1,7 +1,7 @@
 import { MarkdownRenderChild, Notice } from "obsidian";
 import type { DeviceSettings } from "../model/device-settings";
 import type { CellStylePatch } from "../model/ooxml/styles";
-import { formatRef, inRange } from "../model/ooxml/refs";
+import { formatRange, formatRef, inRange, type Range } from "../model/ooxml/refs";
 import type { StructureEdit } from "../model/ooxml/structure-refs";
 import type { FileResolver, SiblingFile, StoredFile } from "../model/storage";
 import type { ValidationIssue } from "../model/validation";
@@ -11,7 +11,7 @@ import type { TableLocation, Workbook } from "../model/workbook";
 import { findConflictCopies, isOpenInExcel, readWorkbook, restoreWorkbook, updateWorkbook, workbookHistory } from "../model/workbook-store";
 import type { CellChange } from "../view/grid-tools";
 import type { CellData, GridData, WarningData } from "../view/grid-data";
-import { GridView } from "../view/grid-view";
+import { GridView, type GridCallbacks } from "../view/grid-view";
 import { BlockConfig, parseBlockConfig } from "./block-config";
 import { buildGrid } from "./grid-builder";
 
@@ -24,7 +24,8 @@ export interface ControllerContext {
 	resolver: FileResolver;
 	/** Controllers currently on screen, so settings changes can restart them. */
 	active: Set<SheetController>;
-	registerCellShortcut?: (input: HTMLTextAreaElement, insertLineBreak: () => void) => () => void;
+	registerShortcutScope?: GridCallbacks["registerShortcutScope"];
+	confirmMerge?: (address: string, clearedCells: number) => Promise<boolean>;
 }
 
 /** Connects one excidian code block to its workbook: loads it, shows it, saves edits. */
@@ -68,8 +69,10 @@ export class SheetController extends MarkdownRenderChild {
 				this.saves.add(save);
 				void save.finally(() => this.saves.delete(save));
 			},
-			registerCellShortcut: this.context.registerCellShortcut,
+			registerShortcutScope: this.context.registerShortcutScope,
 			onFormat: (cells, patch) => void this.formatCells(cells, patch),
+			onMerge: (range, cells) => void this.mergeCells(range, cells),
+			onUnmerge: (ranges) => void this.unmergeCells(ranges),
 			onBatchCommit: (changes) => void this.batchCommit(changes),
 			onStructure: (edit) => void this.structure(edit),
 			onHistory: (direction) => void this.history(direction),
@@ -311,6 +314,30 @@ export class SheetController extends MarkdownRenderChild {
 			this.grid = { ...this.grid, warnings: this.conflictWarnings() };
 			this.view.render(this.grid);
 		}
+	}
+
+	private async mergeCells(range: Range, cells: CellData[]) {
+		if (this.readOnly || this.busy || this.stopped || !this.file || this.cfg?.target.kind !== "sheet") return;
+		const file = this.file;
+		const sheetName = this.selectedSheet;
+		const cleared = cells.filter((cell) => cell.hasContent && (cell.row !== range.top || cell.col !== range.left)).length;
+		if (cleared && !await this.context.confirmMerge?.(formatRange(range), cleared)) return;
+		if (this.readOnly || this.busy || this.stopped || this.file !== file || this.selectedSheet !== sheetName) return;
+
+		await this.mutate((file) => updateWorkbook(file, (wb) => {
+			const sheet = wb.sheet(sheetName);
+			for (const cell of cells) {
+				assertUnchanged(sheet, cell);
+				if (sheet.hasContent(cell.row, cell.col) !== !!cell.hasContent) throw new Error("选区内容已变化，请刷新后重试。");
+			}
+			sheet.mergeCells(range, cleared > 0);
+		}, { recalculate: cleared > 0 }));
+	}
+
+	private async unmergeCells(ranges: Range[]) {
+		if (this.readOnly || this.busy || this.stopped || !this.file || this.cfg?.target.kind !== "sheet" || !ranges.length) return;
+		const sheetName = this.selectedSheet;
+		await this.mutate((file) => updateWorkbook(file, (wb) => wb.sheet(sheetName).unmergeCells(ranges), { recalculate: false }));
 	}
 
 	private async formatCells(cells: CellData[], patch: CellStylePatch) {

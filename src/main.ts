@@ -1,4 +1,4 @@
-import { Platform, Plugin, Scope } from "obsidian";
+import { Modal, Platform, Plugin, Scope } from "obsidian";
 import { ControllerContext, SheetController } from "./controller/sheet-controller";
 import { DeviceSettings } from "./model/device-settings";
 import type { FileResolver } from "./model/storage";
@@ -31,13 +31,25 @@ export default class ExcidianPlugin extends Plugin {
 
 		const context: ControllerContext = {
 			settings, resolver, active: new Set(),
-			registerCellShortcut: (input, insertLineBreak) => {
+			confirmMerge: (address, clearedCells) => new Promise<boolean>((resolve) => {
+				const modal = new Modal(this.app);
+				let confirmed = false;
+				modal.setTitle(`合并 ${address}`);
+				modal.setContent(`合并后只保留左上角的内容，其余 ${clearedCells} 个单元格的内容会被清除。`);
+				const actions = modal.contentEl.createDiv("modal-button-container");
+				const cancel = actions.createEl("button", { text: "取消" });
+				cancel.onclick = () => modal.close();
+				actions.createEl("button", { cls: "mod-warning", text: "合并并清除" }).onclick = () => {
+					confirmed = true;
+					modal.close();
+				};
+				modal.onOpen = () => cancel.focus();
+				modal.setCloseCallback(() => resolve(confirmed));
+				modal.open();
+			}),
+			registerShortcutScope: (register) => {
 				const scope = new Scope(this.app.scope);
-				scope.register(["Alt"], "Enter", (event) => {
-					if (event.target !== input || event.isComposing) return;
-					insertLineBreak();
-					return false;
-				});
+				register(scope);
 				this.app.keymap.pushScope(scope);
 				return () => this.app.keymap.popScope(scope);
 			},

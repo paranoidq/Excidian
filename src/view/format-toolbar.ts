@@ -25,6 +25,11 @@ export class FormatToolbar {
 		};
 		for (const [property, icon, label] of FONT_BUTTONS) {
 			const control = button(this.el, label, icon);
+			if (property === "bold" || property === "italic") {
+				const key = property === "bold" ? "B" : "I";
+				control.title = `${label}（Ctrl/⌘+${key}）`;
+				control.setAttribute("aria-keyshortcuts", `Control+${key} Meta+${key}`);
+			}
 			control.onclick = () => onToggle(property);
 			this.toggles.set(property, control);
 		}

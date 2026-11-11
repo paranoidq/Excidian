@@ -61,3 +61,7 @@ export function formatRange(r: Range): string {
 export function inRange(r: Range, row: number, col: number): boolean {
 	return row >= r.top && row <= r.bottom && col >= r.left && col <= r.right;
 }
+
+export function rangesOverlap(a: Range, b: Range): boolean {
+	return a.top <= b.bottom && b.top <= a.bottom && a.left <= b.right && b.left <= a.right;
+}

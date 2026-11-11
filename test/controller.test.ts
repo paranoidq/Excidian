@@ -3,6 +3,7 @@ import { build } from "esbuild";
 import { createRequire } from "node:module";
 import { describe, it } from "node:test";
 import { DeviceSettings } from "../src/model/device-settings";
+import { parseRange } from "../src/model/ooxml/refs";
 import type { StoredFile } from "../src/model/storage";
 import { Workbook } from "../src/model/workbook";
 import type { GridCallbacks } from "../src/view/grid-view";
@@ -13,7 +14,7 @@ import { financeWorkbook } from "./fixture";
 
 // Exercise the real controller, workbook and save queue with only the Obsidian
 // lifecycle and DOM view replaced. This catches edits redirected by tab changes.
-async function harness(source = "file: demo.xlsx", defaultReadOnly = true, initiallyOpenInExcel = false) {
+async function harness(source = "file: demo.xlsx", defaultReadOnly = true, initiallyOpenInExcel = false, confirmMerge?: (address: string, clearedCells: number) => Promise<boolean>) {
 	const result = await build({
 		entryPoints: ["src/controller/sheet-controller.ts"], bundle: true, write: false,
 		platform: "node", format: "cjs", external: ["obsidian"],
@@ -58,7 +59,7 @@ async function harness(source = "file: demo.xlsx", defaultReadOnly = true, initi
 	settings.defaultReadOnly = defaultReadOnly;
 	const active = new Set();
 	const root = {} as { view: { callbacks: GridCallbacks; grid: GridData; renders: number; error?: string; destroyed?: boolean; onFinishEdit?: () => void } };
-	const controller = new module.exports.SheetController(root, source, "note.md", { settings, resolver: { resolve: () => file }, active });
+	const controller = new module.exports.SheetController(root, source, "note.md", { settings, resolver: { resolve: () => file }, active, confirmMerge });
 	controller.onload();
 	await until(() => (!!root.view.grid && !root.view.grid.busy) || !!root.view.error);
 	assert.equal(root.view.error, undefined);
@@ -72,6 +73,32 @@ async function until(check: () => boolean) {
 	}
 	throw new Error("Timed out waiting for preview");
 }
+
+it("saves a destructive merge only after confirmation and restores the discarded formula on undo", async () => {
+	let confirmed = false;
+	const h = await harness("file: demo.xlsx", false, false, async (address, cleared) => {
+		assert.equal(address, "A1:B1");
+		assert.equal(cleared, 1);
+		return confirmed;
+	});
+	try {
+		const range = parseRange("A1:B1");
+		const cells = h.view.grid.rows[0].cells.slice(0, 2);
+		const original = (await h.read()).sheet().cell(1, 2);
+		await h.controller.mergeCells(range, cells);
+		assert.equal(h.writes(), 0);
+		confirmed = true;
+		await h.controller.mergeCells(range, cells);
+		assert.equal(h.writes(), 1);
+		assert.equal((await h.read()).sheet().cell(1, 2).formula, undefined);
+		await h.controller.unmergeCells([range]);
+		assert.equal(h.writes(), 2);
+		assert.equal((await h.read()).sheet().cell(1, 2).value, null);
+		await h.controller.history("undo");
+		await h.controller.history("undo");
+		assert.deepEqual((await h.read()).sheet().cell(1, 2), original);
+	} finally { h.controller.onunload(); }
+});
 
 describe("preview controller", () => {
 	it("blocks structural edits while read-only and supports selected-sheet edit/undo/redo", async () => {

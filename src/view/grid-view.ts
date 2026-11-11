@@ -1,5 +1,5 @@
-import { Menu, Notice, setIcon } from "obsidian";
-import { colName } from "../model/ooxml/refs";
+import { Menu, Notice, setIcon, type Scope } from "obsidian";
+import { colName, formatRange, type Range } from "../model/ooxml/refs";
 import type { Axis, StructureEdit } from "../model/ooxml/structure-refs";
 import { bounds, clipboardText, parseClipboard, pasteChanges } from "./grid-tools";
 import type { CellChange, CellPoint, CellRange } from "./grid-tools";
@@ -11,8 +11,10 @@ import type { CellData, CellStyle, GridData, RowData, WarningData } from "./grid
 const ROW_NUMBER_PX = 44;
 
 export interface GridCallbacks {
-	registerCellShortcut?: (input: HTMLTextAreaElement, insertLineBreak: () => void) => () => void;
+	registerShortcutScope?: (register: (scope: Scope) => void) => () => void;
 	onFormat(cells: CellData[], patch: CellStylePatch): void;
+	onMerge(range: Range, cells: CellData[]): void;
+	onUnmerge(ranges: Range[]): void;
 	onBatchCommit(changes: CellChange[]): void;
 	onStructure(edit: StructureEdit): void;
 	onHistory(direction: "undo" | "redo"): void;
@@ -63,7 +65,8 @@ export class GridView {
 	private queryEl?: HTMLInputElement;
 	private findResult?: HTMLElement;
 	private formatToolbar?: FormatToolbar;
-	private wrapText = false;
+	private releaseSelectionShortcuts?: () => void;
+	private wrapOverride?: boolean;
 	private localWidths = new Map<number, number>();
 	private selection?: { axis: Axis; anchor: number; end: number };
 	private dragging = false;
@@ -76,6 +79,8 @@ export class GridView {
 	) {
 		root.addClass("excidian");
 		root.tabIndex = 0;
+		root.addEventListener("focus", this.registerSelectionShortcuts);
+		root.addEventListener("blur", this.clearSelectionShortcuts);
 		root.addEventListener("click", (e) => {
 			if (!(e.target as HTMLElement).closest(".excidian-format-color")) this.formatToolbar?.closePalettes();
 			e.stopPropagation();
@@ -113,9 +118,9 @@ export class GridView {
 
 		this.titleEl!.setText(grid.title);
 		this.titleEl!.title = grid.tooltip;
-		setIcon(this.modeEl!, this.readOnly ? "eye" : "pencil");
-		this.modeEl!.title = this.readOnly ? "当前只读 · 点击切换为可编辑" : "当前可编辑 · 点击切换为只读";
-		this.modeEl!.setAttribute("aria-label", this.readOnly ? "切换为可编辑模式" : "切换为只读模式");
+		this.modeEl!.setText(this.readOnly ? "预览模式" : "编辑模式");
+		this.modeEl!.title = this.readOnly ? "预览模式（只读），点击切换为编辑模式" : "编辑模式，点击切换为预览模式";
+		this.modeEl!.setAttribute("aria-label", this.modeEl!.title);
 		this.modeEl!.setAttribute("aria-pressed", String(!this.readOnly));
 		this.modeEl!.disabled = !!grid.busy;
 		const openLocal = this.root.querySelector<HTMLButtonElement>(".excidian-open-local")!;
@@ -141,7 +146,7 @@ export class GridView {
 		this.noteEl!.setText(grid.note ?? "");
 		this.noteEl!.toggle(!!grid.note);
 		this.paintSelection();
-		this.root.toggleClass("excidian-wrap-all", this.wrapText);
+		this.updateWrapControl();
 		this.scheduleFrozen();
 		this.root.setAttribute("aria-busy", String(!!grid.busy));
 		for (const direction of ["undo", "redo"] as const) {
@@ -176,11 +181,31 @@ export class GridView {
 	}
 
 	destroy() {
+		this.root.removeEventListener("focus", this.registerSelectionShortcuts);
+		this.root.removeEventListener("blur", this.clearSelectionShortcuts);
+		this.clearSelectionShortcuts();
 		this.reset();
 		this.resizeObserver?.disconnect();
 		if (this.freezeFrame !== undefined) this.root.ownerDocument.defaultView!.cancelAnimationFrame(this.freezeFrame);
 		window.clearTimeout(this.statusTimer);
 	}
+
+	private registerSelectionShortcuts = () => {
+		this.releaseSelectionShortcuts ??= this.callbacks.registerShortcutScope?.((scope) => {
+			for (const [key, property] of [["B", "bold"], ["I", "italic"]] as const) {
+				scope.register(["Mod"], key, (event) => {
+					if (event.target !== this.root || event.isComposing) return;
+					if (!event.repeat) this.toggleFormat(property);
+					return false;
+				});
+			}
+		});
+	};
+
+	private clearSelectionShortcuts = () => {
+		this.releaseSelectionShortcuts?.();
+		this.releaseSelectionShortcuts = undefined;
+	};
 
 	private reset() {
 		this.editing?.finish(false);
@@ -215,7 +240,7 @@ export class GridView {
 			setIcon(button, direction === "undo" ? "undo-2" : "redo-2");
 			button.onclick = () => { this.editing?.finish(true); this.callbacks.onHistory(direction); };
 		}
-		this.modeEl = bar.createEl("button", { cls: "clickable-icon excidian-mode" });
+		this.modeEl = bar.createEl("button", { cls: "excidian-mode", attr: { type: "button" } });
 		this.modeEl.onclick = () => {
 			this.editing?.finish(true);
 			this.callbacks.onModeChange(!this.readOnly);
@@ -230,11 +255,12 @@ export class GridView {
 			this.toolsEl?.toggle(this.toolsOpen);
 			if (this.toolsOpen) { this.queryEl?.focus(); this.queryEl?.select(); }
 		};
-		const wrapButton = bar.createEl("button", { cls: "clickable-icon excidian-wrap-toggle", attr: { title: "自动换行（仅当前预览）", "aria-label": "自动换行", "aria-pressed": String(this.wrapText) } });
+		const wrapButton = bar.createEl("button", { cls: "clickable-icon excidian-wrap-toggle", attr: { "aria-label": "自动换行" } });
 		setIcon(wrapButton, "wrap-text");
 		wrapButton.onclick = () => {
-			this.wrapText = !this.wrapText; wrapButton.setAttribute("aria-pressed", String(this.wrapText));
-			this.root.toggleClass("excidian-wrap-all", this.wrapText); this.scheduleFrozen();
+			this.wrapOverride = this.wrapState() === "false";
+			this.updateWrapControl();
+			this.scheduleFrozen();
 		};
 		const openLocal = bar.createEl("button", { cls: "clickable-icon excidian-open-local", attr: { "aria-label": "用本地默认程序打开", title: "用本地默认程序打开（Excel / WPS）" } });
 		setIcon(openLocal, "file-spreadsheet");
@@ -295,6 +321,7 @@ export class GridView {
 			const link = this.data[point.r]?.[point.c]?.link;
 			if (link) menu.addItem((item) => item.setTitle("打开链接").setIcon("external-link").onClick(() => { this.root.ownerDocument.defaultView!.open(link, "_blank", "noopener,noreferrer"); }));
 			if (!this.readOnly) menu.addItem((item) => item.setTitle("清除选区内容").setIcon("eraser").setDisabled(!!this.grid?.busy).onClick(() => this.applyPaste("")));
+			if (this.grid?.structureEditable && this.cells) this.addMergeActions(menu, this.cells);
 			menu.showAtMouseEvent(e);
 		});
 
@@ -323,6 +350,29 @@ export class GridView {
 	}
 
 	private report(error: unknown) { new Notice(`Excidian: ${error instanceof Error ? error.message : String(error)}`, 7000); }
+
+	private addMergeActions(menu: Menu, selection: CellRange) {
+		const { top, left, bottom, right } = bounds(selection);
+		const rows = this.data.slice(top, bottom + 1).map((row) => row.slice(left, right + 1));
+		const cells = rows.flat();
+		const merges = new Map<string, Range>();
+		for (const { mergeRange } of cells) {
+			if (mergeRange) merges.set(formatRange(mergeRange), mergeRange);
+		}
+		const first = cells[0];
+		const rectangular = first && rows.length === bottom - top + 1 && rows.every((row, r) =>
+			row.length === right - left + 1 && row.every((cell, c) => cell.editable && !cell.tableCell && cell.row === first.row + r && cell.col === first.col + c),
+		);
+		const canMerge = rectangular && cells.length > 1 && cells.length <= 10_000 && !merges.size;
+		menu.addSeparator();
+		menu.addItem((item) => item.setTitle("合并单元格").setIcon("combine").setDisabled(!canMerge || !!this.grid?.busy).onClick(() => {
+			if (!canMerge) return;
+			this.callbacks.onMerge({ top: first.row, left: first.col, bottom: first.row + bottom - top, right: first.col + right - left }, cells);
+		}));
+		menu.addItem((item) => item.setTitle("取消合并").setIcon("split").setDisabled(!merges.size || !!this.grid?.busy).onClick(() => {
+			if (merges.size) this.callbacks.onUnmerge([...merges.values()]);
+		}));
+	}
 
 	private pointAt(target: HTMLElement): CellPoint | undefined {
 		const td = target.closest("td");
@@ -381,8 +431,10 @@ export class GridView {
 		}
 		if (command && key === "x") { event.preventDefault(); this.report("请使用复制、粘贴和清除内容；暂不提供剪切移动。"); return; }
 		const formatKey = ({ b: "bold", i: "italic", u: "underline" } as const)[key as "b" | "i" | "u"];
-		if (command && formatKey) {
-			event.preventDefault(); this.toggleFormat(formatKey); return;
+		if (command && formatKey && !event.altKey && !event.shiftKey && !event.isComposing) {
+			event.preventDefault();
+			if (!event.repeat) this.toggleFormat(formatKey);
+			return;
 		}
 		if (command && key === "a") {
 			event.preventDefault(); event.stopPropagation();
@@ -620,6 +672,30 @@ export class GridView {
 		this.refreshFormatting();
 	}
 
+	private wrapState(): "true" | "false" | "mixed" {
+		if (this.wrapOverride !== undefined) return this.wrapOverride ? "true" : "false";
+		let wrapped = false;
+		let unwrapped = false;
+		for (const row of this.data) {
+			for (const cell of row) {
+				if (cell.covered || (!cell.text && !cell.pending)) continue;
+				if (cell.style?.wrap) wrapped = true;
+				else unwrapped = true;
+				if (wrapped && unwrapped) return "mixed";
+			}
+		}
+		return wrapped ? "true" : "false";
+	}
+
+	private updateWrapControl() {
+		const state = this.wrapState();
+		const button = this.root.querySelector<HTMLButtonElement>(".excidian-wrap-toggle")!;
+		button.setAttribute("aria-pressed", state);
+		button.title = state === "false" ? "开启自动换行（仅当前预览）" : "关闭自动换行（仅当前预览）";
+		this.root.toggleClass("excidian-wrap-all", this.wrapOverride === true);
+		this.root.toggleClass("excidian-nowrap-all", this.wrapOverride === false);
+	}
+
 	private scheduleFrozen() {
 		const win = this.root.ownerDocument.defaultView!;
 		if (this.freezeFrame !== undefined) win.cancelAnimationFrame(this.freezeFrame);
@@ -851,7 +927,15 @@ export class GridView {
 		});
 		input.addEventListener("blur", () => finish(true));
 		input.focus();
-		if (input.ownerDocument.activeElement === input) releaseShortcut = this.callbacks.registerCellShortcut?.(input, insertLineBreak);
+		if (input.ownerDocument.activeElement === input) {
+			releaseShortcut = this.callbacks.registerShortcutScope?.((scope) => {
+				scope.register(["Alt"], "Enter", (event) => {
+					if (event.target !== input || event.isComposing) return;
+					insertLineBreak();
+					return false;
+				});
+			});
+		}
 		if (replacement !== undefined) { input.value = replacement; input.setSelectionRange(replacement.length, replacement.length); }
 		else input.select();
 		resize();

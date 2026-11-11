@@ -13,13 +13,13 @@ Reading view and Live Preview show worksheet tabs below the grid. Click a tab to
 switch sheets; an optional `#Sheet name` selects the initial sheet. Short file
 names, aliases and link updates on rename use Obsidian's normal link resolution.
 
-Previews start **read-only**. Use the **eye / pencil** icon in the toolbar to switch the
-current preview. Settings → **Excidian-dev** → **默认只读模式** changes the default
+Previews start **read-only**. The toolbar button shows **预览模式** (preview mode)
+or **编辑模式** (edit mode). Click it to switch modes. Settings → **Excidian-dev** → **默认只读模式** changes the default
 on this device. Before entering edit mode, Excidian checks Excel's owner file.
 If the workbook is already open in Excel, the preview stays read-only and prompts
 **请先在 Excel 中关闭该文件，再切换到编辑模式**. This also applies to the
 configured editable default and `mode: edit` blocks. Close the workbook in Excel,
-then click the mode icon again. If Excel opens it during editing, owner-file
+then click the mode button again. If Excel opens it during editing, owner-file
 notifications return the preview to read-only; save-time checks remain in place.
 The rightmost **spreadsheet icon** opens the original workbook with the desktop
 system's default application (for example Excel or WPS). Before opening, active
@@ -65,14 +65,22 @@ focused table view.
   breaks and use Excel's wrap formatting. Click a dropdown cell in edit mode
   to show all its choices right away.
 - Select cells in edit mode to use the formatting toolbar: bold, italic,
-  underline, strikethrough, fill and text color. Color chevrons open the palette;
-  the main color button reapplies its last color. Each command saves to the
+  underline, strikethrough, fill and text color. With the grid focused,
+  **Cmd/Ctrl+B** toggles bold and **Cmd/Ctrl+I** toggles italic on the selection.
+  Color chevrons open the palette. The main color button reapplies its last color.
+  Each command saves to the
   workbook as one undoable change, preserving values, formulas and number formats.
   Merged cells and protected sheets are excluded from formatting.
-- **自动换行** changes only the preview. Drag a column header's right edge to
-  resize it locally; double-click the edge to restore its width.
+- The preview starts with the workbook's wrap settings. **自动换行** overrides
+  them for the current preview and keeps line breaks entered in cells. Drag a
+  column header's right edge to resize it locally or double-click the edge to
+  restore its width.
   Cell tooltips show complete text. Web/email hyperlinks and plain URLs offer an
   **打开链接** action in the cell's context menu; local/executable links are not exposed.
+- In edit mode, select adjacent worksheet cells and right-click **合并单元格**.
+  The merged cell keeps the upper-left value. Excidian asks before clearing
+  contents from the other selected cells. Right-click a merged cell and choose
+  **取消合并** to split it. Both actions save to the workbook and support undo.
 
 Formulas display Excel's **last saved calculation**, including cached results that
 may become stale after inputs change. Formula tooltips and the preview note make

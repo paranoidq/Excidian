@@ -166,14 +166,14 @@ class RowBuilder {
 		const merge = this.merges.find((m) => inRange(m, r, c));
 		if (merge && !this.canSpan) {
 			// Reordered columns: show the value in the merge's first cell only.
-			if (merge.top === r && merge.left === c) return this.content(r, c);
-			return { row: r, col: c, text: "", editText: "", editable: false, hint: "Part of a merged cell" };
+			if (merge.top === r && merge.left === c) return { ...this.content(r, c), mergeRange: merge };
+			return { row: r, col: c, text: "", editText: "", editable: false, mergeRange: merge, hint: "Part of a merged cell" };
 		}
 		if (merge) {
 			// The merged block is drawn by its first visible cell (normally its top-left).
 			const first = this.firstShown(merge);
-			if (first.row !== r || first.col !== c) return { row: r, col: c, text: "", editText: "", editable: false, covered: true };
-			return { ...this.content(merge.top, merge.left), span: this.spanOf(merge) };
+			if (first.row !== r || first.col !== c) return { row: r, col: c, text: "", editText: "", editable: false, covered: true, mergeRange: merge };
+			return { ...this.content(merge.top, merge.left), span: this.spanOf(merge), mergeRange: merge };
 		}
 		return this.content(r, c);
 	}
@@ -207,6 +207,8 @@ class RowBuilder {
 			link: this.sheet.hyperlink(r, c) ?? (typeof info.value === "string" ? safeLink(info.value) : undefined),
 			editText: editText(info.value, info.formula),
 			editable: !header,
+			hasContent: this.sheet.hasContent(r, c),
+			tableCell: !!table && inRange(table.ref, r, c),
 			numeric: typeof info.value === "number",
 			formula: !!info.formula,
 			pending,

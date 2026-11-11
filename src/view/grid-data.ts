@@ -1,3 +1,5 @@
+import type { Range } from "../model/ooxml/refs";
+
 /** Everything the grid view needs to draw. Built by the controller from the model. */
 export interface GridData {
 	/** Whole-sheet structural actions are offered only in sheet previews. */
@@ -65,6 +67,9 @@ export interface CellData {
 	help?: string;
 	/** A merged cell's size, in grid columns and rows. */
 	span?: { cols: number; rows: number };
+	mergeRange?: Range;
+	hasContent?: boolean;
+	tableCell?: boolean;
 	/** Covered by a merged cell to its left or above: not drawn. */
 	covered?: boolean;
 	/** The header row of an Excel table shown inside a sheet. */
