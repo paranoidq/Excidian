@@ -6,7 +6,7 @@ Click an `.xlsx` file in the file explorer or follow a link such as
 `[[budget.xlsx]]` to open it in its own Obsidian tab. The tab has the same
 worksheet controls and editing features as an embed. To open it externally, use
 Obsidian's **Open in default app** context menu item or the toolbar's
-spreadsheet icon.
+external-link icon.
 
 Embed a workbook directly with Obsidian's attachment syntax:
 
@@ -29,7 +29,7 @@ If the workbook is already open in Excel, the preview stays read-only and prompt
 configured editable default and `mode: edit` blocks. Close the workbook in Excel,
 then click the mode button again. If Excel opens it during editing, owner-file
 notifications return the preview to read-only; save-time checks remain in place.
-The rightmost **spreadsheet icon** opens the original workbook with the desktop
+The rightmost **external-link icon** opens the original workbook with the desktop
 system's default application (for example Excel or WPS). Before opening, active
 cell editors are committed and pending saves finish; every preview of the same
 workbook switches to read-only. A failed save cancels opening, and a launch

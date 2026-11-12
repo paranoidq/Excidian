@@ -284,7 +284,7 @@ export class GridView {
 			openTab.onclick = this.callbacks.onOpenTab;
 		}
 		const openLocal = bar.createEl("button", { cls: "clickable-icon excidian-open-local", attr: { "aria-label": "用本地默认程序打开", title: "用本地默认程序打开（Excel / WPS）" } });
-		setIcon(openLocal, "file-spreadsheet");
+		setIcon(openLocal, "external-link");
 		openLocal.onclick = () => this.callbacks.onOpenLocal();
 		this.buildSearch();
 		this.warningsEl = this.root.createDiv("excidian-warnings");
