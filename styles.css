@@ -45,6 +45,18 @@
 	background: var(--interactive-accent);
 }
 
+.excidian-zoom {
+	display: inline-flex;
+	align-items: center;
+	gap: 2px;
+}
+
+.excidian-zoom-level {
+	min-width: 4em;
+	font-size: var(--font-ui-small);
+	font-variant-numeric: tabular-nums;
+}
+
 .excidian-sheets {
 	display: flex;
 	gap: 4px;
@@ -107,6 +119,7 @@
 .excidian-wrap {
 	max-height: 70vh;
 	overflow: auto;
+	overflow-anchor: none;
 	border: 1px solid var(--background-modifier-border);
 	border-radius: var(--radius-s);
 }

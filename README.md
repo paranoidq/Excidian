@@ -85,6 +85,9 @@ focused table view.
   restore its width.
   Cell tooltips show complete text. Web/email hyperlinks and plain URLs offer an
   **打开链接** action in the cell's context menu; local/executable links are not exposed.
+- Hold **Ctrl** or **⌘** and scroll over the grid to zoom, or click **−** and
+  **+** in the toolbar. Click the percentage to reset to 100%. Zoom only affects
+  the current view.
 - In edit mode, select adjacent worksheet cells and right-click **合并单元格**.
   The merged cell keeps the upper-left value. Excidian asks before clearing
   contents from the other selected cells. Right-click a merged cell and choose

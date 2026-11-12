@@ -9,6 +9,10 @@ import { CellPopup } from "./cell-popup";
 import type { CellData, GridData, RowData, WarningData } from "./grid-data";
 
 const ROW_NUMBER_PX = 44;
+const MIN_ZOOM = 50;
+const MAX_ZOOM = 200;
+const ZOOM_STEP = 10;
+const ZOOM_WHEEL_THRESHOLD = 24;
 
 export interface GridCallbacks {
 	registerShortcutScope?: (register: (scope: Scope) => void) => () => void;
@@ -68,6 +72,9 @@ export class GridView {
 	private formatToolbar?: FormatToolbar;
 	private releaseSelectionShortcuts?: () => void;
 	private wrapOverride?: boolean;
+	private zoom = 100;
+	private zoomWheelDelta = 0;
+	private zoomControls?: { out: HTMLButtonElement; reset: HTMLButtonElement; in: HTMLButtonElement };
 	private localWidths = new Map<number, number>();
 	private selection?: { axis: Axis; anchor: number; end: number };
 	private dragging = false;
@@ -215,6 +222,8 @@ export class GridView {
 		this.root.empty();
 		this.tbody = undefined;
 		this.tableEl = undefined;
+		this.zoomControls = undefined;
+		this.zoomWheelDelta = 0;
 		this.colEls = [];
 		this.columnsKey = "";
 		this.rowEls = [];
@@ -265,6 +274,7 @@ export class GridView {
 			this.updateWrapControl();
 			this.scheduleFrozen();
 		};
+		this.buildZoomControls(bar);
 		if (this.callbacks.onOpenTab) {
 			const openTab = bar.createEl("button", {
 				cls: "clickable-icon excidian-open-tab",
@@ -286,7 +296,9 @@ export class GridView {
 		}
 		// Keep clicks from moving the editor cursor into the code block source.
 		wrap.addEventListener("mousedown", (e) => e.stopPropagation());
+		wrap.addEventListener("wheel", (e) => this.zoomWithWheel(e), { passive: false });
 		const table = wrap.createEl("table", { cls: "excidian-table" });
+		table.style.setProperty("zoom", String(this.zoom / 100));
 		this.tableEl = table;
 		const colgroup = table.createEl("colgroup");
 		if (rowNumbers) colgroup.createEl("col", { cls: "excidian-col-rownum" });
@@ -361,6 +373,59 @@ export class GridView {
 	}
 
 	private report(error: unknown) { new Notice(`Excidian: ${error instanceof Error ? error.message : String(error)}`, 7000); }
+
+	private buildZoomControls(bar: HTMLElement) {
+		const group = bar.createDiv({ cls: "excidian-zoom", attr: { role: "group", "aria-label": "表格缩放" } });
+		const out = group.createEl("button", { cls: "clickable-icon", attr: { type: "button", title: "缩小", "aria-label": "缩小" } });
+		const reset = group.createEl("button", { cls: "excidian-zoom-level", attr: { type: "button", title: "恢复 100%（Ctrl/⌘ + 滚轮可缩放）" } });
+		const plus = group.createEl("button", { cls: "clickable-icon", attr: { type: "button", title: "放大", "aria-label": "放大" } });
+		setIcon(out, "minus");
+		setIcon(plus, "plus");
+		out.onclick = () => this.setZoom(this.zoom - ZOOM_STEP);
+		reset.onclick = () => this.setZoom(100);
+		plus.onclick = () => this.setZoom(this.zoom + ZOOM_STEP);
+		this.zoomControls = { out, reset, in: plus };
+		this.updateZoomControls();
+	}
+
+	private updateZoomControls() {
+		const controls = this.zoomControls;
+		if (!controls) return;
+		controls.reset.setText(`${this.zoom}%`);
+		controls.reset.setAttribute("aria-label", `当前缩放 ${this.zoom}%，点击恢复 100%`);
+		controls.out.disabled = this.zoom <= MIN_ZOOM;
+		controls.in.disabled = this.zoom >= MAX_ZOOM;
+	}
+
+	private zoomWithWheel(event: WheelEvent) {
+		if (!(event.ctrlKey || event.metaKey) || !event.deltaY) return;
+		event.preventDefault();
+		event.stopPropagation();
+		// High-resolution wheels and trackpads can report several small deltas per step.
+		const direction = Math.sign(event.deltaY);
+		if (this.zoomWheelDelta * direction < 0) this.zoomWheelDelta = 0;
+		this.zoomWheelDelta += event.deltaMode === 0 ? event.deltaY : direction * ZOOM_WHEEL_THRESHOLD;
+		if (Math.abs(this.zoomWheelDelta) < ZOOM_WHEEL_THRESHOLD) return;
+		this.zoomWheelDelta = 0;
+		this.setZoom(this.zoom - direction * ZOOM_STEP);
+	}
+
+	private setZoom(percent: number) {
+		const table = this.tableEl;
+		const wrap = table?.parentElement;
+		const zoom = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, percent));
+		if (!table || !wrap || !this.grid || zoom === this.zoom) return;
+		const ratio = zoom / this.zoom;
+		const left = wrap.scrollLeft * ratio;
+		const top = wrap.scrollTop * ratio;
+		this.zoom = zoom;
+		table.style.setProperty("zoom", String(zoom / 100));
+		this.sizeColumns(this.grid);
+		wrap.scrollLeft = left;
+		wrap.scrollTop = top;
+		this.updateZoomControls();
+		this.scheduleFrozen();
+	}
 
 	private addMergeActions(menu: Menu, selection: CellRange) {
 		const { top, left, bottom, right } = bounds(selection);
@@ -572,9 +637,15 @@ export class GridView {
 
 	private resizeColumn(event: PointerEvent, column: number, th: HTMLElement) {
 		event.preventDefault(); event.stopPropagation(); this.editing?.finish(true);
-		const handle = event.target as HTMLElement, start = event.clientX, width = th.getBoundingClientRect().width;
+		const scale = this.zoom / 100;
+		const handle = event.target as HTMLElement, start = event.clientX, width = th.getBoundingClientRect().width / scale;
 		handle.setPointerCapture(event.pointerId);
-		const move = (e: PointerEvent) => { this.localWidths.set(column, Math.max(40, Math.min(800, width + e.clientX - start))); this.sizeColumns(this.grid!); this.scheduleFrozen(); };
+		const move = (e: PointerEvent) => {
+			const next = width + (e.clientX - start) / scale;
+			this.localWidths.set(column, Math.max(40, Math.min(800, next)));
+			this.sizeColumns(this.grid!);
+			this.scheduleFrozen();
+		};
 		const finish = () => { handle.removeEventListener("pointermove", move); handle.removeEventListener("pointerup", finish); handle.removeEventListener("lostpointercapture", finish); };
 		handle.addEventListener("pointermove", move); handle.addEventListener("pointerup", finish); handle.addEventListener("lostpointercapture", finish);
 	}
@@ -716,13 +787,16 @@ export class GridView {
 	private positionFrozen() {
 		if (!this.tableEl || !this.grid) return;
 		const frozen = this.grid.frozen ?? { rows: 0, columns: 0 };
-		const headerHeight = this.tableEl.tHead?.getBoundingClientRect().height ?? 0;
+		// The DOM rects are scaled, while sticky offsets are set in table CSS pixels.
+		const scale = this.zoom / 100;
+		const headerHeight = (this.tableEl.tHead?.getBoundingClientRect().height ?? 0) / scale;
 		let top = headerHeight;
 		const lefts: number[] = [];
-		let left = this.rowNumbers ? this.tableEl.querySelector("th")?.getBoundingClientRect().width ?? ROW_NUMBER_PX : 0;
+		const rowHeader = this.tableEl.querySelector("th");
+		let left = this.rowNumbers ? (rowHeader ? rowHeader.getBoundingClientRect().width / scale : ROW_NUMBER_PX) : 0;
 		for (let i = 0; i < this.colEls.length; i++) {
 			lefts.push(left);
-			if ((this.grid.columnNumbers?.[i] ?? Infinity) <= frozen.columns) left += this.colEls[i].getBoundingClientRect().width;
+			if ((this.grid.columnNumbers?.[i] ?? Infinity) <= frozen.columns) left += this.colEls[i].getBoundingClientRect().width / scale;
 		}
 		const position = (el: HTMLElement, freezeRow: boolean, freezeCol: boolean, topPx: number, leftPx: number, header = false) => {
 			el.toggleClass("excidian-frozen-row", freezeRow);
@@ -741,7 +815,7 @@ export class GridView {
 				const c = j - this.offset;
 				position(el as HTMLElement, freezeRow, c < 0 || (this.grid!.columnNumbers?.[c] ?? Infinity) <= frozen.columns, top, c < 0 ? 0 : lefts[c]);
 			});
-			if (freezeRow) top += tr.getBoundingClientRect().height;
+			if (freezeRow) top += tr.getBoundingClientRect().height / scale;
 		});
 	}
 
@@ -761,7 +835,9 @@ export class GridView {
 
 		if (grid.fit !== false && !this.localWidths.size) {
 			const total = widths.reduce((a, b) => a + b, 0);
-			this.tableEl!.setCssStyles({ width: "100%" });
+			// Percentage widths resolve against the unzoomed viewport. Obsidian
+			// themes can force Markdown tables to 100%, even inside embeds.
+			this.tableEl!.style.setProperty("width", `${this.zoom}%`, "important");
 			widths.forEach((w, j) => this.colEls[j]?.setCssStyles({ width: `${((w / total) * 100).toFixed(2)}%` }));
 			return;
 		}
@@ -770,7 +846,7 @@ export class GridView {
 		const pixels = widths.map((w, i) => this.localWidths.get(i) ?? Math.round(w * 7 + 5));
 		pixels.forEach((px, j) => this.colEls[j]?.setCssStyles({ width: `${px}px` }));
 		const rowNumberWidth = this.rowNumbers ? ROW_NUMBER_PX : 0;
-		this.tableEl!.setCssStyles({ width: `${pixels.reduce((a, b) => a + b, rowNumberWidth)}px` });
+		this.tableEl!.style.setProperty("width", `${pixels.reduce((a, b) => a + b, rowNumberWidth)}px`, "important");
 	}
 
 	private renderWarnings(warnings: WarningData[]) {
