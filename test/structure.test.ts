@@ -130,7 +130,7 @@ describe("worksheet structure", () => {
 		pkg.markDirty("xl/worksheets/sheet1.xml");
 		const bytes = await pkg.toBytes(); let writes = 0;
 		const file: StoredFile = { id: "blocked-test", name: "blocked.xlsx", displayPath: "blocked.xlsx", read: async () => bytes,
-			write: async () => { writes++; }, writeSibling: async () => { writes++; }, siblings: async () => [], watch: () => () => {} };
+			write: async () => { writes++; }, siblings: async () => [], watch: () => () => {} };
 		await assert.rejects(updateWorkbook(file, (wb) => wb.editStructure("2026", insert)), /图表/);
 		assert.equal(writes, 0);
 	});
@@ -142,7 +142,7 @@ describe("workbook undo/redo", () => {
 		const original = bytes.slice();
 		const file: StoredFile = {
 			id: "history-test", name: "demo.xlsx", displayPath: "demo.xlsx", read: async () => bytes,
-			write: async (data) => { bytes = data; }, writeSibling: async () => {}, siblings: async () => [], watch: () => () => {},
+			write: async (data) => { bytes = data; }, siblings: async () => [], watch: () => () => {},
 		};
 		await updateWorkbook(file, (wb) => wb.editStructure("2026", insert));
 		assert.deepEqual(workbookHistory(file), { undo: true, redo: false });

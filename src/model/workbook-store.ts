@@ -1,10 +1,8 @@
-import { backupName, isConflictCopyName, isExcelOwnerName, SiblingFile, StoredFile } from "./storage";
+import { isConflictCopyName, isExcelOwnerName, SiblingFile, StoredFile } from "./storage";
 import { Workbook } from "./workbook";
 
 // Writes to the same file are chained so two quick edits never race each other.
 const writeQueues = new Map<string, Promise<unknown>>();
-// Files already backed up during this Obsidian session.
-const backedUp = new Set<string>();
 interface HistoryEntry { before: Uint8Array; after: Uint8Array }
 interface History { undo: HistoryEntry[]; redo: HistoryEntry[] }
 const histories = new Map<string, History>();
@@ -53,7 +51,6 @@ export async function readWorkbook(file: StoredFile): Promise<Workbook> {
 /**
  * Loads the file fresh, applies `change`, and saves it. Re-reading right before
  * writing keeps changes made in Excel (or synced from another device) meanwhile.
- * The first save of a session keeps a backup of the original next to the file.
  * Resolves to the updated workbook.
  */
 export function updateWorkbook(file: StoredFile, change: (wb: Workbook) => void, options?: { recalculate?: boolean }): Promise<Workbook> {
@@ -62,11 +59,7 @@ export function updateWorkbook(file: StoredFile, change: (wb: Workbook) => void,
 			const wb = await Workbook.load(original);
 			change(wb);
 			const bytes = await wb.save(options?.recalculate);
-			if (!backedUp.has(file.id)) {
-				await file.writeSibling(backupName(file.name), original);
-				backedUp.add(file.id);
-			}
-			// A sync client/Excel may have changed the file while XML or backup was prepared.
+			// A sync client or Excel may have changed the file while the new workbook was prepared.
 			if (!same(await file.read(), original)) throw new Error("文件在保存前已被其他程序修改，本次修改未写入。请刷新后重试。");
 			await file.write(bytes);
 			const history = histories.get(file.id) ?? { undo: [], redo: [] };

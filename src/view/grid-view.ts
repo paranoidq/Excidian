@@ -3,10 +3,10 @@ import { colName, formatRange, type Range } from "../model/ooxml/refs";
 import type { Axis, StructureEdit } from "../model/ooxml/structure-refs";
 import { bounds, clipboardText, parseClipboard, pasteChanges } from "./grid-tools";
 import type { CellChange, CellPoint, CellRange } from "./grid-tools";
-import type { CellStylePatch, FontToggle } from "../model/ooxml/styles";
-import { FormatToolbar } from "./format-toolbar";
+import type { CellFont, CellStylePatch, FontToggle } from "../model/ooxml/styles";
+import { fontState, FormatToolbar } from "./format-toolbar";
 import { CellPopup } from "./cell-popup";
-import type { CellData, CellStyle, GridData, RowData, WarningData } from "./grid-data";
+import type { CellData, GridData, RowData, WarningData } from "./grid-data";
 
 const ROW_NUMBER_PX = 44;
 
@@ -21,6 +21,7 @@ export interface GridCallbacks {
 	onSheetChange(sheet: string): void;
 	onModeChange(readOnly: boolean): void;
 	onCommit(cell: CellData, text: string): void;
+	onOpenTab?(): void;
 	onOpenLocal(): void;
 	onRefresh(): void;
 	onWarningAction(warningId: string, actionId: string): void;
@@ -123,6 +124,8 @@ export class GridView {
 		this.modeEl!.setAttribute("aria-label", this.modeEl!.title);
 		this.modeEl!.setAttribute("aria-pressed", String(!this.readOnly));
 		this.modeEl!.disabled = !!grid.busy;
+		const openTab = this.root.querySelector<HTMLButtonElement>(".excidian-open-tab");
+		if (openTab) openTab.disabled = !!grid.busy;
 		const openLocal = this.root.querySelector<HTMLButtonElement>(".excidian-open-local")!;
 		openLocal.toggle(!!grid.canOpenLocal);
 		openLocal.disabled = !!grid.busy;
@@ -262,6 +265,14 @@ export class GridView {
 			this.updateWrapControl();
 			this.scheduleFrozen();
 		};
+		if (this.callbacks.onOpenTab) {
+			const openTab = bar.createEl("button", {
+				cls: "clickable-icon excidian-open-tab",
+				attr: { type: "button", "aria-label": "在标签页打开", title: "在标签页打开" },
+			});
+			setIcon(openTab, "app-window");
+			openTab.onclick = this.callbacks.onOpenTab;
+		}
 		const openLocal = bar.createEl("button", { cls: "clickable-icon excidian-open-local", attr: { "aria-label": "用本地默认程序打开", title: "用本地默认程序打开（Excel / WPS）" } });
 		setIcon(openLocal, "file-spreadsheet");
 		openLocal.onclick = () => this.callbacks.onOpenLocal();
@@ -536,7 +547,7 @@ export class GridView {
 
 	private toggleFormat(property: FontToggle) {
 		const cells = this.formatCells();
-		if (cells.length) this.callbacks.onFormat(cells, { [property]: !cells.every((cell) => cell.style?.[property]) });
+		if (cells.length) this.callbacks.onFormat(cells, { [property]: !cells.every((cell) => fontState(cell, property) === true) });
 	}
 
 	private applyFormat(patch: CellStylePatch) {
@@ -813,8 +824,18 @@ export class GridView {
 			td.addClass("excidian-covered");
 			return;
 		}
-		td.setText(cell.pending ? cell.editText : cell.text);
-		td.toggleClass("excidian-link", !!cell.link);
+		if (cell.runs) {
+			td.empty();
+			for (const run of cell.runs) {
+				if (!run.text) continue;
+				const span = td.createSpan({ cls: "excidian-text-run", text: run.text });
+				if (run.font) applyFont(span, run.font);
+			}
+		} else {
+			td.setText(cell.pending ? cell.editText : cell.text);
+			if (cell.style) applyFont(td, cell.style);
+		}
+		td.toggleClass("excidian-link", !!cell.link && !cell.runs);
 		td.toggleClass("excidian-num", !!cell.numeric);
 		td.toggleClass("excidian-formula", !!cell.formula);
 		td.toggleClass("excidian-pending", !!cell.pending);
@@ -823,7 +844,8 @@ export class GridView {
 		td.toggleClass("excidian-table-header", !!cell.tableHeader);
 		td.toggleClass("excidian-wrap-text", !!cell.style?.wrap);
 		td.toggleClass("excidian-multiline", /[\r\n]/.test(cell.text));
-		if (cell.style) applyStyle(td, cell.style);
+		if (cell.style?.align) td.addClass(`excidian-align-${cell.style.align}`);
+		if (cell.style?.background) td.setCssStyles({ backgroundColor: cell.style.background });
 		td.title = [cell.text, cell.hint, cell.link ? `${cell.link} · 右键打开链接` : undefined].filter(Boolean).join("\n");
 	}
 
@@ -942,13 +964,10 @@ export class GridView {
 	}
 }
 
-function applyStyle(td: HTMLElement, style: CellStyle) {
-	td.toggleClass("excidian-bold", !!style.bold);
-	td.toggleClass("excidian-italic", !!style.italic);
-	td.toggleClass("excidian-underline", !!style.underline);
-	td.toggleClass("excidian-strike", !!style.strike);
-	if (style.align) td.addClass(`excidian-align-${style.align}`);
-	// Colours come from the workbook, so they can only be set per cell.
-	if (style.color) td.setCssStyles({ color: style.color });
-	if (style.background) td.setCssStyles({ backgroundColor: style.background });
+function applyFont(el: HTMLElement, font: CellFont) {
+	el.toggleClass("excidian-bold", !!font.bold);
+	el.toggleClass("excidian-italic", !!font.italic);
+	el.toggleClass("excidian-underline", !!font.underline);
+	el.toggleClass("excidian-strike", !!font.strike);
+	if (font.color) el.setCssStyles({ color: font.color });
 }

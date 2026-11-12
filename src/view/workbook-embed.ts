@@ -1,5 +1,6 @@
 import { MarkdownRenderChild, Plugin, TFile } from "obsidian";
 import { SheetController, type ControllerContext } from "../controller/sheet-controller";
+import { openWorkbookTab } from "./workbook-view";
 
 interface EmbedContext {
 	containerEl: HTMLElement;
@@ -66,6 +67,7 @@ class WorkbookEmbed extends MarkdownRenderChild {
 				// block and wiki embed of the same file share save queues and undo.
 				resolver: { resolve: () => this.context.resolver.resolve(this.file.path, this.sourcePath) },
 			},
+			(sheet) => openWorkbookTab(this.plugin.app.workspace, this.file, sheet),
 		));
 	}
 }

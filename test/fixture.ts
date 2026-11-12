@@ -1,4 +1,7 @@
 import { strFromU8, strToU8, unzipSync, zipSync } from "fflate";
+import { Package } from "../src/model/ooxml/package";
+import { child, createChild, elements, parseXml, setText } from "../src/model/ooxml/xml";
+import { Workbook } from "../src/model/workbook";
 
 /** The text of one part of a saved workbook, or undefined if it isn't there. */
 export function readEntry(bytes: Uint8Array, path: string): string | undefined {
@@ -98,4 +101,43 @@ export async function financeWorkbook(options: { totalsRow?: boolean } = {}): Pr
 <table xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" id="2" name="TabListe" displayName="TabListe" ref="A1:A6"><autoFilter ref="A1:A6"/><tableColumns count="1"><tableColumn id="1" name="Tipo"/></tableColumns><tableStyleInfo name="TableStyleLight1" showRowStripes="1"/></table>`,
 	);
 	return zipSync(files);
+}
+
+/** Shared and inline rich text over a red, bold, underlined cell style. */
+export async function richTextWorkbook(): Promise<Uint8Array> {
+	const wb = await Workbook.load(await financeWorkbook());
+	for (const col of [1, 2, 3]) {
+		wb.sheet("Liste").formatCell(8, col, { bold: true, underline: true, color: "#D00000", wrap: true });
+	}
+	const pkg = await Package.load(await wb.save(false));
+	const stringsPath = "xl/sharedStrings.xml";
+	const strings = pkg.xml(stringsPath)!.documentElement;
+	const index = elements(strings, "si").length;
+	const source = parseXml(`<si xmlns="${strings.namespaceURI}">
+		<r><rPr><b/><color rgb="FFFF0000"/><rFont val="Calibri"/></rPr><t>标题</t></r>
+		<r><rPr><b val="0"/><u val="none"/><color theme="1"/></rPr><t xml:space="preserve">\n普通正文 </t></r>
+		<r><rPr><u/><color indexed="12"/></rPr><t>蓝色下划线</t></r>
+		<r><t>继承整格样式</t></r>
+		<rPh sb="0" eb="2"><t>注音</t></rPh>
+	</si>`).documentElement;
+	strings.appendChild(strings.ownerDocument.importNode(source, true));
+	strings.setAttribute("uniqueCount", String(index + 1));
+	strings.setAttribute("count", String(Number(strings.getAttribute("count")) + 2));
+	pkg.markDirty(stringsPath);
+
+	const sheetPath = "xl/worksheets/sheet3.xml";
+	const data = child(pkg.xml(sheetPath)!.documentElement, "sheetData")!;
+	const row = elements(data, "row").find((el) => el.getAttribute("r") === "8")!;
+	for (const cell of elements(row, "c")) {
+		if (cell.getAttribute("r") === "B8") {
+			cell.setAttribute("t", "inlineStr");
+			const inline = createChild(cell, "is");
+			for (const run of elements(source)) inline.appendChild(cell.ownerDocument.importNode(run, true));
+		} else {
+			cell.setAttribute("t", "s");
+			setText(createChild(cell, "v"), String(index));
+		}
+	}
+	pkg.markDirty(sheetPath);
+	return pkg.toBytes();
 }

@@ -1,5 +1,6 @@
 import { safeLink } from "../model/hyperlinks";
 import { formatValue, numberColor } from "../model/number-format";
+import { contrastText } from "../model/ooxml/colors";
 import { colName, inRange, MAX_COL, MAX_ROW, Range } from "../model/ooxml/refs";
 import type { CellInfo, Sheet } from "../model/sheet";
 import type { Table } from "../model/table";
@@ -200,10 +201,16 @@ class RowBuilder {
 		const pending = !!info.formula && info.value === null;
 		const table = this.table ?? this.wb.tableAt(this.sheet, r, c)?.table;
 		const rule = header ? undefined : this.rule(r, c, table);
+		const style = styleOf(info);
+		const defaultRunColor = info.runs && info.look.fill ? contrastText(info.look.fill) : undefined;
 		return {
 			row: r,
 			col: c,
 			text: formatValue(info.value, info.format),
+			runs: info.runs?.map(({ text, font }) => ({
+				text,
+				font: font ? { ...font, color: font.color ?? defaultRunColor } : style,
+			})),
 			link: this.sheet.hyperlink(r, c) ?? (typeof info.value === "string" ? safeLink(info.value) : undefined),
 			editText: editText(info.value, info.formula),
 			editable: !header,
@@ -216,7 +223,7 @@ class RowBuilder {
 			help: rule?.help,
 			hint: header ? "Table header: rename columns in Excel" : info.formula ? `=${info.formula} · 显示 Excel 上次计算结果；修改数据后需在 Excel 中重新计算` : rule?.help,
 			tableHeader: header || undefined,
-			style: styleOf(info),
+			style,
 		};
 	}
 

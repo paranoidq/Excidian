@@ -51,7 +51,7 @@ async function harness(source = "file: demo.xlsx", defaultReadOnly = true, initi
 		read: async () => bytes,
 		write: async (value) => { await onWrite?.(); bytes = value; writes++; },
 		openLocal: async () => { openCount++; await onOpen?.(); },
-		writeSibling: async () => {}, siblings: async () => { await inspection?.(); return openInExcel ? [{ name: "~$demo.xlsx", modified: new Date() }] : []; },
+		siblings: async () => { await inspection?.(); return openInExcel ? [{ name: "~$demo.xlsx", modified: new Date() }] : []; },
 		watch: (handler) => { notify = handler; watchers++; return () => { watchers--; }; },
 	};
 	const data = new Map<string, unknown>();

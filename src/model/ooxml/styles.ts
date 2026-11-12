@@ -2,13 +2,17 @@ import { contrastText, resolveColor } from "./colors";
 import type { Package } from "./package";
 import { child, createChild, elements } from "./xml";
 
-/** How a cell looks. Colours are "#RRGGBB"; unset means "use the Obsidian theme". */
-export interface CellFormat {
+/** Font properties shared by cell styles and rich text runs. */
+export interface CellFont {
 	bold?: boolean;
 	italic?: boolean;
 	underline?: boolean;
 	strike?: boolean;
 	color?: string;
+}
+
+/** How a cell looks. Colours are "#RRGGBB"; unset means "use the Obsidian theme". */
+export interface CellFormat extends CellFont {
 	fill?: string;
 	align?: "left" | "center" | "right" | "justify";
 	wrap?: boolean;
@@ -52,6 +56,33 @@ function flag(el: Element | undefined): boolean {
 	if (!el) return false;
 	const val = el.getAttribute("val");
 	return val !== "0" && val !== "false" && val !== "none";
+}
+
+export function patchFont(font: Element, patch: CellStylePatch) {
+	let changed = false;
+	for (const [name, tag] of Object.entries(FONT_TOGGLES)) {
+		const enabled = patch[name as FontToggle];
+		const el = child(font, tag);
+		if (enabled === undefined || enabled === flag(el)) continue;
+		if (el) font.removeChild(el);
+		if (enabled) createChild(font, tag);
+		changed = true;
+	}
+	if (patch.color !== undefined) {
+		const old = child(font, "color");
+		const rgb = patch.color ? `FF${patch.color.slice(1).toUpperCase()}` : null;
+		const matches = rgb ? old?.getAttribute("rgb") === rgb && old.attributes.length === 1 : !old;
+		if (!matches) {
+			if (old) font.removeChild(old);
+			if (rgb) createChild(font, "color").setAttribute("rgb", rgb);
+			changed = true;
+		}
+	}
+	return changed;
+}
+
+export function hasFontPatch(patch: CellStylePatch): boolean {
+	return patch.color !== undefined || Object.keys(FONT_TOGGLES).some((name) => patch[name as FontToggle] !== undefined);
 }
 
 /** Excel's short-date format: shown in the user's locale, so it gets special handling. */
@@ -143,14 +174,7 @@ export class Styles {
 		if (xf) {
 			const fontId = Number(xf.getAttribute("fontId") ?? 0);
 			const font = this.fonts[fontId];
-			if (font) {
-				if (flag(child(font, "b"))) format.bold = true;
-				if (flag(child(font, "i"))) format.italic = true;
-				if (flag(child(font, "u"))) format.underline = true;
-				if (flag(child(font, "strike"))) format.strike = true;
-				const color = resolveColor(child(font, "color"), this.theme, "font");
-				if (color && (!color.isDefault || (fontId !== 0 && child(font, "color")?.hasAttribute("rgb")))) format.color = color.hex;
-			}
+			if (font) format = this.readFont(font, fontId !== 0);
 
 			const pattern = this.fills[Number(xf.getAttribute("fillId") ?? 0)];
 			const patternFill = pattern && child(pattern, "patternFill");
@@ -170,6 +194,17 @@ export class Styles {
 			if (wrap === "1" || wrap === "true") format.wrap = true;
 		}
 		this.formats.set(styleIndex, format);
+		return format;
+	}
+
+	readFont(font: Element, keepExplicitRgb = true): CellFont {
+		const format: CellFont = {};
+		for (const [name, tag] of Object.entries(FONT_TOGGLES)) {
+			if (flag(child(font, tag))) format[name as FontToggle] = true;
+		}
+		const colorEl = child(font, "color");
+		const color = resolveColor(colorEl, this.theme, "font");
+		if (color && (!color.isDefault || (keepExplicitRgb && colorEl?.hasAttribute("rgb")))) format.color = color.hex;
 		return format;
 	}
 
@@ -203,22 +238,12 @@ export class Styles {
 		if (!root || !cellXfs || !source) throw new Error("工作簿的样式记录不完整，请先在 Excel 中保存。");
 		const xf = source.cloneNode(true) as Element;
 
-		if (patch.color !== undefined || Object.keys(FONT_TOGGLES).some((name) => patch[name as FontToggle] !== undefined)) {
+		if (hasFontPatch(patch)) {
 			const fonts = child(root, "fonts");
 			const original = this.fonts[Number(source.getAttribute("fontId") ?? 0)];
 			if (!fonts || !original) throw new Error("工作簿的字体记录不完整。");
 			const font = original.cloneNode(true) as Element;
-			for (const [name, tag] of Object.entries(FONT_TOGGLES)) {
-				const enabled = patch[name as FontToggle], el = child(font, tag);
-				if (enabled === undefined || enabled === flag(el)) continue;
-				if (el) font.removeChild(el);
-				if (enabled) createChild(font, tag);
-			}
-			if (patch.color !== undefined) {
-				const old = child(font, "color");
-				if (old) font.removeChild(old);
-				if (patch.color) createChild(font, "color").setAttribute("rgb", `FF${patch.color.slice(1).toUpperCase()}`);
-			}
+			patchFont(font, patch);
 			xf.setAttribute("fontId", String(this.intern(fonts, this.fonts, font)));
 			xf.setAttribute("applyFont", "1");
 		}

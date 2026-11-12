@@ -1,4 +1,6 @@
 import type { Range } from "../model/ooxml/refs";
+import type { TextRun } from "../model/ooxml/rich-text";
+import type { CellFont } from "../model/ooxml/styles";
 
 /** Everything the grid view needs to draw. Built by the controller from the model. */
 export interface GridData {
@@ -52,6 +54,7 @@ export interface CellData {
 	row: number;
 	col: number;
 	text: string;
+	runs?: TextRun[];
 	link?: string;
 	editText: string;
 	editable: boolean;
@@ -78,12 +81,7 @@ export interface CellData {
 }
 
 /** CSS-ready formatting. */
-export interface CellStyle {
-	bold?: boolean;
-	italic?: boolean;
-	underline?: boolean;
-	strike?: boolean;
-	color?: string;
+export interface CellStyle extends CellFont {
 	background?: string;
 	align?: "left" | "center" | "right" | "justify";
 	wrap?: boolean;

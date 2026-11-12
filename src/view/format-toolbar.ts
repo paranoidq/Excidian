@@ -11,6 +11,13 @@ const COLORS = [
 	"#C00000", "#FF0000", "#FFC000", "#FFFF00", "#70AD47", "#00B0F0", "#4472C4", "#7030A0",
 ];
 
+export function fontState(cell: CellData, property: FontToggle): boolean | "mixed" {
+	if (!cell.runs) return !!cell.style?.[property];
+	const runs = cell.runs.filter((run) => run.text);
+	const active = runs.filter((run) => run.font?.[property]).length;
+	return active === 0 ? false : active === runs.length ? true : "mixed";
+}
+
 export class FormatToolbar {
 	private el: HTMLElement;
 	private toggles = new Map<FontToggle, HTMLButtonElement>();
@@ -82,8 +89,9 @@ export class FormatToolbar {
 		this.el.toggle(visible);
 		this.el.querySelectorAll("button").forEach((button) => { button.disabled = !cells.length; });
 		for (const [property, button] of this.toggles) {
-			const active = cells.filter((cell) => cell.style?.[property]).length;
-			button.setAttribute("aria-pressed", !active ? "false" : active === cells.length ? "true" : "mixed");
+			const states = cells.map((cell) => fontState(cell, property));
+			const pressed = states.every((state) => state === false) ? false : states.every((state) => state === true) ? true : "mixed";
+			button.setAttribute("aria-pressed", String(pressed));
 		}
 		if (!cells.length) this.closePalettes();
 	}

@@ -2,6 +2,12 @@
 
 ## Development preview (0.6.0-dev)
 
+Click an `.xlsx` file in the file explorer or follow a link such as
+`[[budget.xlsx]]` to open it in its own Obsidian tab. The tab has the same
+worksheet controls and editing features as an embed. To open it externally, use
+Obsidian's **Open in default app** context menu item or the toolbar's
+spreadsheet icon.
+
 Embed a workbook directly with Obsidian's attachment syntax:
 
 ```markdown
@@ -12,6 +18,8 @@ Embed a workbook directly with Obsidian's attachment syntax:
 Reading view and Live Preview show worksheet tabs below the grid. Click a tab to
 switch sheets; an optional `#Sheet name` selects the initial sheet. Short file
 names, aliases and link updates on rename use Obsidian's normal link resolution.
+Click **在标签页打开** in the embed toolbar to open the current worksheet in a
+workbook tab or switch to the one already open.
 
 Previews start **read-only**. The toolbar button shows **预览模式** (preview mode)
 or **编辑模式** (edit mode). Click it to switch modes. Settings → **Excidian-dev** → **默认只读模式** changes the default
@@ -142,7 +150,7 @@ embed registry; if unavailable, the public fallback supports Reading view only.
 - **Sheets** laid out like in Excel: widths, merged cells, fills, red negatives
 - **Dropdowns and data validation** from your Excel rules
 - **OneDrive-aware**: one note works on every computer; conflict copies are flagged
-- **Safe**: only the cells you edit change, with an automatic backup
+- **Safe**: saves check for changes from other programs before replacing the workbook
 
 Website: [francescoumberto.github.io/ObXcel](https://francescoumberto.github.io/ObXcel/) · Desktop (macOS, Windows, Linux) and mobile (iOS, Android).
 
@@ -170,7 +178,7 @@ Mobile apps can only reach files inside the vault. **To use the same note on you
 Excidian reads and writes the Excel files that your notes point to. **On desktop these can be outside your vault** (for example in your OneDrive folder); for this it uses Node's file system (`fs`), because Obsidian's vault API only covers files inside the vault. On mobile it uses only the vault API, so it only reaches files inside the vault. In detail, it:
 
 - reads the workbook named in each `excidian` code block, and writes to it only when you edit a cell;
-- creates `<name>.excidian-backup.xlsx` next to a workbook the first time it saves it in a session, and briefly a hidden temporary file there while saving;
+- briefly creates a hidden temporary file next to the workbook when saving on desktop, then uses it to replace the workbook;
 - looks at the workbook's folder to notice changes and sync-conflict copies, and lists the OneDrive folders in your home folder to resolve `onedrive:` paths.
 
 It touches no other files, makes **no network requests**, and collects no data. The OneDrive folder setting and dismissed warnings are stored on your device only.
@@ -289,7 +297,6 @@ Tip: to manage a category list in one place, put the categories in their own tab
 - Rows can't be added to a table with a totals row; turn the totals row off in Excel to use the empty row.
 - Table headers can't be edited from Obsidian (rename columns in Excel).
 - The table reloads on its own when the file changes on disk.
-- The first time Excidian saves a file in each Obsidian session, it copies the original to `<name>.excidian-backup.xlsx` next to it.
 
 ## Project structure (MVC)
 
@@ -298,8 +305,8 @@ src/
 ├── main.ts                    Plugin entry: picks the platform, wires settings, the settings tab and the code block
 ├── model/                     Excel data and rules. No Obsidian or Node imports: runs on desktop and mobile, testable in Node.
 │   ├── workbook.ts            Workbook: sheets, tables, adding table rows, saving
-│   ├── storage.ts             Storage interface (StoredFile), vault paths, backup and conflict-copy names
-│   ├── workbook-store.ts      Load, queued save with backup, conflict copies, "open in Excel" check
+│   ├── storage.ts             Storage interface (StoredFile), vault paths, conflict-copy names
+│   ├── workbook-store.ts      Load, queued saves, undo/redo, conflict copies, "open in Excel" check
 │   ├── device-settings.ts     Per-device settings (OneDrive folder, dismissed warnings)
 │   ├── sheet.ts               Reading and writing cells in a worksheet
 │   ├── table.ts               An Excel table: range, header/totals rows, columns

@@ -37,17 +37,9 @@ export class VaultFile implements StoredFile {
 	}
 
 	async write(bytes: Uint8Array) {
-		await this.writePath(this.id, bytes);
-	}
-
-	async writeSibling(name: string, bytes: Uint8Array) {
-		await this.writePath(this.folder ? `${this.folder}/${name}` : name, bytes);
-	}
-
-	private async writePath(vaultPath: string, bytes: Uint8Array) {
-		const existing = this.app.vault.getFileByPath(vaultPath);
+		const existing = this.app.vault.getFileByPath(this.id);
 		if (isFile(existing)) await this.app.vault.modifyBinary(existing, toArrayBuffer(bytes));
-		else await this.app.vault.createBinary(vaultPath, toArrayBuffer(bytes));
+		else await this.app.vault.createBinary(this.id, toArrayBuffer(bytes));
 	}
 
 	async siblings(): Promise<SiblingFile[]> {

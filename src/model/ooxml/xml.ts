@@ -49,13 +49,3 @@ export function setText(el: Element, text: string) {
 export function removeChildren(el: Element) {
 	while (el.firstChild) el.removeChild(el.firstChild);
 }
-
-/** Text of a shared string or inline string: plain `<t>` or rich-text runs, without phonetic hints. */
-export function richText(el: Element): string {
-	let text = "";
-	for (const part of elements(el)) {
-		if (part.localName === "t") text += textOf(part);
-		else if (part.localName === "r") text += textOf(child(part, "t"));
-	}
-	return text;
-}

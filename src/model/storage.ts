@@ -24,8 +24,6 @@ export interface StoredFile {
 	read(): Promise<Uint8Array>;
 	/** Replaces the file's content, as safely as the platform allows. */
 	write(bytes: Uint8Array): Promise<void>;
-	/** Creates or replaces another file in the same folder. */
-	writeSibling(name: string, bytes: Uint8Array): Promise<void>;
 	/** The other files in the same folder. */
 	siblings(): Promise<SiblingFile[]>;
 	/** Calls `onChange` (debounced) when this file or a conflict copy of it changes. Returns a stop function. */
@@ -41,12 +39,6 @@ export interface FileResolver {
 export function splitName(name: string): [string, string] {
 	const dot = name.lastIndexOf(".");
 	return dot > 0 ? [name.slice(0, dot), name.slice(dot)] : [name, ""];
-}
-
-/** "bank.xlsx" → "bank.excidian-backup.xlsx" */
-export function backupName(name: string): string {
-	const [stem, ext] = splitName(name);
-	return `${stem}.excidian-backup${ext}`;
 }
 
 /**

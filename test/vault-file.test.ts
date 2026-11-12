@@ -60,7 +60,7 @@ describe("paths on mobile", () => {
 });
 
 describe("workbooks in the vault", () => {
-	it("reads, saves through the vault API and keeps a backup next to the file", async () => {
+	it("saves through the vault API without creating another file", async () => {
 		const original = await financeWorkbook();
 		const { app, files } = fakeVault({ "Finance/bank.xlsx": original });
 		const file = new VaultResolver(app).resolve("./bank.xlsx", "Finance/October.md");
@@ -70,7 +70,7 @@ describe("workbooks in the vault", () => {
 		const reread = await readWorkbook(file);
 		assert.equal(reread.table("Movimenti").table.ref.bottom, 4);
 		assert.equal(reread.sheet("2026").cell(4, 4).value, "Sport");
-		assert.deepEqual(files.get("Finance/bank.excidian-backup.xlsx")?.data, original);
+		assert.deepEqual([...files.keys()], ["Finance/bank.xlsx"]);
 	});
 
 	it("says clearly when the file isn't in the vault", async () => {

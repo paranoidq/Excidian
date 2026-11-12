@@ -2,14 +2,16 @@ import { safeLink } from "./hyperlinks";
 import { shiftFormula } from "./ooxml/formula";
 import type { Package } from "./ooxml/package";
 import { type CellRef, formatRange, formatRef, inRange, MAX_COL, MAX_ROW, parseRange, parseRef, Range, rangesOverlap } from "./ooxml/refs";
-import type { CellFormat, CellStylePatch, Styles } from "./ooxml/styles";
-import { child, createChild, elements, removeChildren, richText, setText, textOf } from "./ooxml/xml";
+import { isRichText, readCellText, type RichText, type TextRun } from "./ooxml/rich-text";
+import { hasFontPatch, patchFont, type CellFormat, type CellStylePatch, type Styles } from "./ooxml/styles";
+import { child, createChild, elements, removeChildren, setText, textOf } from "./ooxml/xml";
 import type { Table } from "./table";
 import { readValidations, ValidationRule } from "./validation";
 import { CellInput, CellValue, dateToSerial, serialToDate, validateInput } from "./values";
 
 export interface CellInfo {
 	value: CellValue;
+	runs?: TextRun[];
 	formula?: string;
 	/** Excel number format code, e.g. `#,##0.00 "€"`. */
 	format: string;
@@ -34,7 +36,7 @@ const BEFORE_MERGE_CELLS = new Set([
 export interface SheetContext {
 	pkg: Package;
 	styles: Styles;
-	sharedStrings: string[];
+	sharedStrings: (string | RichText)[];
 	date1904: boolean;
 }
 
@@ -147,8 +149,11 @@ export class Sheet {
 		this.index();
 		const el = this.cells.get(key(row, col))?.el;
 		const style = this.styleOf(el, row, col);
+		const value = el ? this.readValue(el, style) : null;
+		const rich = isRichText(value);
 		return {
-			value: el ? this.readValue(el, style) : null,
+			value: rich ? value.text : value,
+			runs: rich ? value.runs : undefined,
 			formula: el ? this.readFormula(el, row, col) : undefined,
 			format: this.ctx.styles.formatCode(style),
 			look: this.ctx.styles.cellFormat(style),
@@ -276,7 +281,7 @@ export class Sheet {
 		this.markDirty();
 	}
 
-	private readValue(el: Element, style: number): CellValue {
+	private readValue(el: Element, style: number): CellValue | RichText {
 		const v = child(el, "v");
 		const raw = v ? textOf(v) : undefined;
 		switch (el.getAttribute("t")) {
@@ -284,7 +289,7 @@ export class Sheet {
 				return raw === undefined ? null : (this.ctx.sharedStrings[Number(raw)] ?? "");
 			case "inlineStr": {
 				const is = child(el, "is");
-				return is ? richText(is) : "";
+				return is ? readCellText(is, this.ctx.styles) : "";
 			}
 			case "str":
 				return raw ?? "";
@@ -360,10 +365,31 @@ export class Sheet {
 		const existing = this.cells.get(key(row, col))?.el;
 		const original = this.styleOf(existing, row, col);
 		const next = this.ctx.styles.formatStyle(original, patch);
-		if (next === original) return;
+		const runsChanged = existing && hasFontPatch(patch) && this.formatTextRuns(existing, original, patch);
+		if (next === original && !runsChanged) return;
 		(existing ?? this.createCell(row, col)).setAttribute("s", String(next));
 		this.growDimension(row, col);
 		this.markDirty();
+	}
+
+	private formatTextRuns(el: Element, style: number, patch: CellStylePatch): boolean {
+		if (!["s", "inlineStr"].includes(el.getAttribute("t") ?? "")) return false;
+		const value = this.readValue(el, style);
+		if (!isRichText(value)) return false;
+		// A shared string can be used by other cells. Update a private inline copy.
+		const copy = el.ownerDocument.importNode(value.source, true);
+		let changed = false;
+		for (const run of elements(copy, "r")) {
+			const font = child(run, "rPr");
+			if (font && patchFont(font, patch)) changed = true;
+		}
+		if (!changed) return false;
+		const previous = child(el, el.getAttribute("t") === "s" ? "v" : "is");
+		if (previous) el.removeChild(previous);
+		el.setAttribute("t", "inlineStr");
+		const inline = createChild(el, "is", child(el, "extLst") ?? null);
+		while (copy.firstChild) inline.appendChild(copy.firstChild);
+		return true;
 	}
 
 	setCell(row: number, col: number, input: CellInput) {

@@ -47,6 +47,7 @@ export class SheetController extends MarkdownRenderChild {
 	private generation = 0;
 	private stopped = true;
 	private busy = false;
+	private openingTab = false;
 	private saves = new Set<Promise<void>>();
 	private saveFailures = 0;
 
@@ -56,13 +57,11 @@ export class SheetController extends MarkdownRenderChild {
 		/** Vault-relative path of the note containing the block. */
 		private notePath: string,
 		private context: ControllerContext,
+		private openTab?: (sheet?: string) => Promise<void>,
 	) {
 		super(containerEl);
 		this.view = new GridView(containerEl, {
-			onSheetChange: (sheet) => {
-				this.selectedSheet = sheet;
-				this.render();
-			},
+			onSheetChange: (sheet) => this.selectSheet(sheet),
 			onModeChange: (readOnly) => this.changeMode(readOnly),
 			onCommit: (cell, text) => {
 				const save = this.commit(cell, text);
@@ -76,6 +75,7 @@ export class SheetController extends MarkdownRenderChild {
 			onBatchCommit: (changes) => void this.batchCommit(changes),
 			onStructure: (edit) => void this.structure(edit),
 			onHistory: (direction) => void this.history(direction),
+			onOpenTab: openTab ? () => void this.openInTab() : undefined,
 			onOpenLocal: () => void this.openLocally(),
 			onRefresh: () => void this.reload(),
 			onWarningAction: (warningId, actionId) => this.onWarningAction(warningId, actionId),
@@ -91,6 +91,15 @@ export class SheetController extends MarkdownRenderChild {
 		this.context.active.delete(this);
 		this.stop();
 		this.view.destroy();
+	}
+
+	/** Opens a named worksheet, including links followed before the workbook loads. */
+	selectSheet(sheet: string) {
+		if (!sheet || this.stopped || this.cfg?.target.kind !== "sheet" || this.selectedSheet === sheet) return;
+		if (this.workbook && !this.workbook.sheets.some((candidate) => candidate.name === sheet)) return;
+		this.view.finishEdit();
+		this.selectedSheet = sheet;
+		this.render();
 	}
 
 	/** Re-reads the block settings, e.g. after the OneDrive folder changed. */
@@ -181,6 +190,22 @@ export class SheetController extends MarkdownRenderChild {
 			if (current()) new Notice(`Excidian: 无法确认文件是否被 Excel 占用，已保持只读。${errorMessage(error)}`, 8000);
 		} finally {
 			if (current()) { this.checkingMode = false; this.render(); }
+		}
+	}
+
+	private async openInTab() {
+		if (!this.openTab || this.stopped || this.busy || this.openingTab) return;
+		const file = this.file;
+		const sheet = this.selectedSheet;
+		this.openingTab = true;
+		try {
+			this.view.finishEdit();
+			await Promise.all([...this.saves]);
+			if (!this.stopped && this.file === file) await this.openTab(sheet);
+		} catch (error) {
+			new Notice(`Excidian: 无法在标签页打开。 ${errorMessage(error)}`);
+		} finally {
+			this.openingTab = false;
 		}
 	}
 

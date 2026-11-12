@@ -5,7 +5,7 @@ import { child, createChild, elements } from "../src/model/ooxml/xml";
 import { Workbook } from "../src/model/workbook";
 import { buildGrid } from "../src/controller/grid-builder";
 import { parseBlockConfig } from "../src/controller/block-config";
-import { financeWorkbook, readEntry } from "./fixture";
+import { financeWorkbook, readEntry, richTextWorkbook } from "./fixture";
 
 describe("saved spreadsheet presentation", () => {
 	it("keeps the saved row order and excludes Excel-hidden rows in both sheet and table views", async () => {
@@ -25,6 +25,44 @@ describe("saved spreadsheet presentation", () => {
 		assert.deepEqual(buildGrid(wb, cfg, true).rows.map((row) => row.label), ["3"]);
 		const sheet = buildGrid(wb, parseBlockConfig("file: demo.xlsx\nsheet: 2026"), true);
 		assert.deepEqual(sheet.rows.map((row) => row.label), ["1", "3"]);
+	});
+});
+
+describe("character formatting in spreadsheet text", () => {
+	it("keeps shared and inline runs separate from the cell font and preserves the plain text", async () => {
+		const wb = await Workbook.load(await richTextWorkbook());
+		const config = parseBlockConfig("file: demo.xlsx\nsheet: Liste\nrange: A8:B8");
+		const [shared, inline] = buildGrid(wb, config, true).rows[0].cells;
+		for (const cell of [shared, inline]) {
+			assert.equal(cell.text, "标题\n普通正文 蓝色下划线继承整格样式");
+			assert.equal(cell.editText, cell.text);
+			assert.equal(cell.style?.wrap, true);
+			assert.deepEqual(cell.runs?.map(({ text, font }) => [text, font?.color, !!font?.bold, !!font?.underline]), [
+				["标题", "#FF0000", true, false],
+				["\n普通正文 ", undefined, false, false],
+				["蓝色下划线", "#0000FF", false, true],
+				["继承整格样式", "#D00000", true, true],
+			]);
+		}
+	});
+
+	it("applies a whole-cell font change without affecting other cells sharing the string", async () => {
+		const original = await richTextWorkbook();
+		const wb = await Workbook.load(original);
+		const sheet = wb.sheet("Liste");
+		const before = sheet.cell(8, 3);
+		sheet.formatCell(8, 1, { bold: false, color: "#008000" });
+		const saved = await wb.save(false);
+		const updated = (await Workbook.load(saved)).sheet("Liste");
+		assert.equal(updated.cell(8, 1).value, before.value);
+		assert.deepEqual(updated.cell(8, 1).runs?.slice(0, 3).map((run) => run.font), [
+			{ color: "#008000" }, { color: "#008000" }, { color: "#008000", underline: true },
+		]);
+		assert.equal(updated.cell(8, 1).look.bold, undefined);
+		assert.equal(updated.cell(8, 1).look.color, "#008000");
+		assert.deepEqual(updated.cell(8, 3), before);
+		assert.equal(readEntry(saved, "xl/sharedStrings.xml"), readEntry(original, "xl/sharedStrings.xml"));
+		assert.match(readEntry(saved, "xl/worksheets/sheet3.xml")!, /<rFont val="Calibri"/);
 	});
 });
 

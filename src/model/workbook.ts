@@ -3,10 +3,11 @@ import { readThemeColors } from "./ooxml/colors";
 import { shiftFormula } from "./ooxml/formula";
 import { Package } from "./ooxml/package";
 import { colNumber, formatRef, MAX_ROW, parseRange, Range } from "./ooxml/refs";
+import { readCellText, type RichText } from "./ooxml/rich-text";
 import { defaultStylesXml, Styles } from "./ooxml/styles";
 import { editStructure } from "./ooxml/structure";
 import type { StructureEdit } from "./ooxml/structure-refs";
-import { child, createChild, elements, NS_RELATIONSHIPS, richText, textOf } from "./ooxml/xml";
+import { child, createChild, elements, NS_RELATIONSHIPS, textOf } from "./ooxml/xml";
 import { Sheet, SheetContext } from "./sheet";
 import { Table } from "./table";
 import { checkInput, describeRule, ListOption, ValidationIssue, ValidationRule } from "./validation";
@@ -49,13 +50,14 @@ export class Workbook {
 		const rels = pkg.rels(path);
 		const workbookPr = child(doc.documentElement, "workbookPr");
 		const themePath = rels.find(REL_TYPE("theme"))?.target;
+		const styles = new Styles(pkg, rels.find(REL_TYPE("styles"))?.target, readThemeColors(themePath ? pkg.xml(themePath)?.documentElement : undefined), () => {
+			const relationship = rels.find(REL_TYPE("worksheet"))?.type.replace(/\/worksheet$/, "/styles") ?? `${NS_RELATIONSHIPS}/styles`;
+			return pkg.addRelatedXml(path, "styles.xml", relationship, "application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml", defaultStylesXml(doc.documentElement.namespaceURI === "http://purl.oclc.org/ooxml/spreadsheetml/main" ? doc.documentElement.namespaceURI : "http://schemas.openxmlformats.org/spreadsheetml/2006/main"));
+		});
 		const ctx: SheetContext = {
 			pkg,
-			styles: new Styles(pkg, rels.find(REL_TYPE("styles"))?.target, readThemeColors(themePath ? pkg.xml(themePath)?.documentElement : undefined), () => {
-				const relationship = rels.find(REL_TYPE("worksheet"))?.type.replace(/\/worksheet$/, "/styles") ?? `${NS_RELATIONSHIPS}/styles`;
-				return pkg.addRelatedXml(path, "styles.xml", relationship, "application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml", defaultStylesXml(doc.documentElement.namespaceURI === "http://purl.oclc.org/ooxml/spreadsheetml/main" ? doc.documentElement.namespaceURI : "http://schemas.openxmlformats.org/spreadsheetml/2006/main"));
-			}),
-			sharedStrings: readSharedStrings(pkg, rels.find(REL_TYPE("sharedStrings"))?.target),
+			styles,
+			sharedStrings: readSharedStrings(pkg, rels.find(REL_TYPE("sharedStrings"))?.target, styles),
 			date1904: ["1", "true"].includes(workbookPr?.getAttribute("date1904") ?? ""),
 		};
 
@@ -347,7 +349,7 @@ export class Workbook {
 	}
 }
 
-function readSharedStrings(pkg: Package, path: string | undefined): string[] {
+function readSharedStrings(pkg: Package, path: string | undefined, styles: Styles): (string | RichText)[] {
 	const root = path ? pkg.xml(path)?.documentElement : undefined;
-	return root ? elements(root, "si").map(richText) : [];
+	return root ? elements(root, "si").map((el) => readCellText(el, styles)) : [];
 }

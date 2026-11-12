@@ -41,10 +41,6 @@ export class NodeFile implements StoredFile {
 		await fs.promises.rename(tmp, this.id);
 	}
 
-	async writeSibling(name: string, bytes: Uint8Array) {
-		await fs.promises.writeFile(path.join(this.dir, name), bytes);
-	}
-
 	async siblings(): Promise<SiblingFile[]> {
 		let names: string[];
 		try {
